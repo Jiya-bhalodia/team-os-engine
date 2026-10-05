@@ -1,0 +1,66 @@
+openapi: 3.0.3
+info:
+  title: Team A Eligibility Runtime API
+  version: v1
+  description: Team A owns runtime eligibility evaluation, queues and slot leases. Team C owns applications and sends applicationId.
+paths:
+  /health:
+    get: {summary: Liveness, responses: {'200': {description: Service is running}}}
+  /ready:
+    get: {summary: Readiness, responses: {'200': {description: Service can accept work}}}
+  /api/v1/eligibility/requests:
+    post:
+      summary: Queue an asynchronous eligibility evaluation
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {$ref: '#/components/parameters/CorrelationId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EligibilityRequest'}}}}
+      responses:
+        '201': {description: Queued}
+        '200': {description: Identical idempotent replay}
+        '400': {description: Invalid request}
+        '401': {description: Unauthorized when service token is configured}
+        '409': {description: Idempotency key conflict}
+  /api/v1/eligibility/requests/{requestId}:
+    get:
+      summary: Poll lifecycle status
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: requestId, required: true, schema: {type: string}}]
+      responses: {'200': {description: Status including decision and lease fields}, '404': {description: Unknown request}}
+  /api/v1/eligibility/decisions/{decisionId}:
+    get:
+      summary: Read the final eligibility decision
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: decisionId, required: true, schema: {type: string}}]
+      responses: {'200': {description: Decision}, '404': {description: Unknown decision}}
+  /api/v1/drives/{driveId}/queue:
+    get:
+      summary: Per-drive queued or processing depth
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: driveId, required: true, schema: {type: string}}]
+      responses: {'200': {description: Queue summary}}
+  /internal/v1/locks/{leaseId}:
+    delete:
+      summary: Release an active lease after Team C compensation
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: leaseId, required: true, schema: {type: string}}]
+      responses: {'200': {description: Released}, '400': {description: Lease cannot be released}}
+  /internal/v1/locks/{leaseId}/commit:
+    post:
+      summary: Finalize lease after Team C authoritative commit
+      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: leaseId, required: true, schema: {type: string}}]
+      responses: {'200': {description: Committed}, '400': {description: Lease cannot be committed}}
+components:
+  parameters:
+    Authorization: {in: header, name: Authorization, required: true, schema: {type: string, example: Bearer service-token}}
+    CorrelationId: {in: header, name: X-Correlation-ID, required: true, schema: {type: string}}
+    IdempotencyKey: {in: header, name: Idempotency-Key, required: true, schema: {type: string}}
+  schemas:
+    EligibilityRequest:
+      type: object
+      required: [applicationId, studentId, driveId, ruleSetVersion, student, ruleSet, chainingStrategy]
+      properties:
+        applicationId: {type: string, example: APP-001}
+        studentId: {type: string, example: STU001}
+        driveId: {type: string, example: DRV001}
+        ruleSetVersion: {type: string, example: v1}
+        priority: {type: integer, default: 1}
+        chainingStrategy: {type: string, enum: [sequential_and, weighted_priority, decision_tree]}
+        slotId: {type: string}
+        slotLeaseTtlSeconds: {type: integer, default: 300}
+        student: {type: object, required: [studentId, cgpa, backlogs, attendancePct, branch], properties: {studentId: {type: string}, cgpa: {type: number}, backlogs: {type: integer}, attendancePct: {type: number}, branch: {type: string}, skills: {type: array, items: {type: string}}}}
+        ruleSet: {type: object, required: [version, rules], properties: {version: {type: string}, rules: {type: array, minItems: 1, items: {type: object}}}}
