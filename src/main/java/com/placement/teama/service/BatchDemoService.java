@@ -94,11 +94,11 @@ public class BatchDemoService {
         out.append("Students submitted       : ").append(response.getTotalRequests()).append('\n');
         out.append("Queue strategy           : ").append(response.getQueueStrategy()).append('\n');
         out.append("Eligible / Conditional / Not eligible : ").append(s.get("eligible")).append(" / ")
-                .append(s.get("conditional")).append(" / ").append(s.get("notEligible")).append('\n');
+                .append(s.get("conditional")).append(" / ").append(s.get("not_eligible")).append('\n');
         out.append("Failed requests          : ").append(s.get("failed")).append('\n');
-        out.append("Processing time          : ").append(m.get("processingTimeMs")).append(" ms\n");
-        out.append("Average evaluation time  : ").append(m.get("averageEvaluationTimeMs")).append(" ms\n");
-        out.append("Throughput               : ").append(m.get("throughputRequestsPerSecond")).append(" requests/sec\n\n");
+        out.append("Processing time          : ").append(m.get("processing_time_ms")).append(" ms\n");
+        out.append("Average evaluation time  : ").append(m.get("average_evaluation_time_ms")).append(" ms\n");
+        out.append("Throughput               : ").append(m.get("throughput_requests_per_second")).append(" requests/sec\n\n");
         out.append("STUDENT RESULTS\n");
         for (BatchEvaluationResponse.StudentResult r : response.getStudents()) {
             out.append(String.format("%-12s %-14s %-16s %s%n", r.getStudentId(), r.getState(),
@@ -114,8 +114,8 @@ public class BatchDemoService {
             telemetryService.recordDeadlock();
             telemetryService.recordDeadlockResolved();
         }
-        return Map.of("deadlockDetected", !cycle.isEmpty(), "cycle", cycle,
-                "recoveryAction", "WAIT_FOR_EDGES_CLEARED_AND_REQUESTS_ABORTED");
+        return Map.of("deadlock_detected", !cycle.isEmpty(), "cycle", cycle,
+                "recovery_action", "WAIT_FOR_EDGES_CLEARED_AND_REQUESTS_ABORTED");
     }
 
     /** One-command demo: 20 requests, real queue workers, real slot conflict, then safe deadlock detection. */
@@ -127,8 +127,8 @@ public class BatchDemoService {
         BatchEvaluationRequestDto request = generatedDemoRequest();
         BatchEvaluationResponse batch = submit(request, correlationId);
         Map<String, Object> deadlock = runDeadlockDemo();
-        return Map.of("batch", batch, "deadlockDemo", deadlock,
-                "reportUrl", "/api/v1/demo/batch-evaluation/" + batch.getBatchId() + "/report");
+        return Map.of("batch", batch, "deadlock_demo", deadlock,
+                "report_url", "/api/v1/demo/batch-evaluation/" + batch.getBatchId() + "/report");
     }
 
     private BatchEvaluationResponse response(BatchRecord batch) {
@@ -160,11 +160,11 @@ public class BatchDemoService {
         long duration = Math.max(1, (finished ? Instant.now() : Instant.now()).toEpochMilli() - batch.startedAt.toEpochMilli());
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("total", batch.requestIds.size()); summary.put("completed", complete); summary.put("eligible", eligible);
-        summary.put("conditional", conditional); summary.put("notEligible", notEligible); summary.put("failed", failed);
+        summary.put("conditional", conditional); summary.put("not_eligible", notEligible); summary.put("failed", failed);
         Map<String, Object> metrics = new LinkedHashMap<>();
-        metrics.put("processingTimeMs", duration);
-        metrics.put("averageEvaluationTimeMs", evaluationCount == 0 ? 0.0 : evaluationTotal / evaluationCount);
-        metrics.put("throughputRequestsPerSecond", Math.round((complete * 1000.0 / duration) * 100.0) / 100.0);
+        metrics.put("processing_time_ms", duration);
+        metrics.put("average_evaluation_time_ms", evaluationCount == 0 ? 0.0 : evaluationTotal / evaluationCount);
+        metrics.put("throughput_requests_per_second", Math.round((complete * 1000.0 / duration) * 100.0) / 100.0);
         metrics.put("runtime", telemetryService.getMetricsSummary(queueService.getDepth()));
         return BatchEvaluationResponse.builder().batchId(batch.batchId).status(finished ? "COMPLETED" : "PROCESSING")
                 .totalRequests(batch.requestIds.size()).queueStrategy(queueService.getStrategyName())

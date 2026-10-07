@@ -1,5 +1,8 @@
 package com.placement.teama.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,11 +14,14 @@ import java.util.List;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class StudentSnapshot {
+    @JsonAlias("studentId")
     private String studentId;
     private double cgpa;
     private int backlogs;
     private String branch;
+    @JsonAlias("attendancePct")
     private double attendancePct;
     private List<String> skills;
 }

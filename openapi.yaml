@@ -2,65 +2,505 @@ openapi: 3.0.3
 info:
   title: Team A Eligibility Runtime API
   version: v1
-  description: Team A owns runtime eligibility evaluation, queues and slot leases. Team C owns applications and sends applicationId.
+  description: >-
+    Team A owns runtime eligibility evaluation, queues and slot leases. Team C
+    owns applications and sends application_id. JSON properties use snake_case;
+    URL paths and HTTP header names retain their existing spelling.
+servers:
+  - url: https://team-os-engine.onrender.com
 paths:
   /health:
-    get: {summary: Liveness, responses: {'200': {description: Service is running}}}
+    get:
+      summary: Liveness
+      responses:
+        '200': {description: Service is running, content: {application/json: {schema: {$ref: '#/components/schemas/HealthEnvelope'}}}}
   /ready:
-    get: {summary: Readiness, responses: {'200': {description: Service can accept work}}}
+    get:
+      summary: Readiness
+      responses:
+        '200': {description: Service can accept work, content: {application/json: {schema: {$ref: '#/components/schemas/ReadyEnvelope'}}}}
   /api/v1/eligibility/requests:
     post:
       summary: Queue an asynchronous eligibility evaluation
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {$ref: '#/components/parameters/CorrelationId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/EligibilityRequest'}}}}
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EligibilityRequest'}
       responses:
-        '201': {description: Queued}
-        '200': {description: Identical idempotent replay}
+        '201': {description: Queued, content: {application/json: {schema: {$ref: '#/components/schemas/QueueStatusEnvelope'}}}}
+        '200': {description: Identical idempotent replay, content: {application/json: {schema: {$ref: '#/components/schemas/QueueStatusEnvelope'}}}}
         '400': {description: Invalid request}
         '401': {description: Unauthorized when service token is configured}
         '409': {description: Idempotency key conflict}
   /api/v1/eligibility/requests/{requestId}:
     get:
       summary: Poll lifecycle status
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: requestId, required: true, schema: {type: string}}]
-      responses: {'200': {description: Status including decision and lease fields}, '404': {description: Unknown request}}
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: requestId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Status including decision and lease fields, content: {application/json: {schema: {$ref: '#/components/schemas/QueueStatusEnvelope'}}}}
+        '404': {description: Unknown request}
   /api/v1/eligibility/decisions/{decisionId}:
     get:
       summary: Read the final eligibility decision
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: decisionId, required: true, schema: {type: string}}]
-      responses: {'200': {description: Decision}, '404': {description: Unknown decision}}
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: decisionId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Decision, content: {application/json: {schema: {$ref: '#/components/schemas/DecisionEnvelope'}}}}
+        '404': {description: Unknown decision}
   /api/v1/drives/{driveId}/queue:
     get:
       summary: Per-drive queued or processing depth
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: driveId, required: true, schema: {type: string}}]
-      responses: {'200': {description: Queue summary}}
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: driveId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Queue summary, content: {application/json: {schema: {$ref: '#/components/schemas/QueueSummaryEnvelope'}}}}
+  /internal/v1/rules/evaluate:
+    post:
+      summary: Evaluate a rule set directly
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RuleEvaluationRequest'}
+      responses:
+        '200': {description: Decision, content: {application/json: {schema: {$ref: '#/components/schemas/DecisionEnvelope'}}}}
+        '400': {description: Invalid request}
+  /internal/v1/locks/acquire:
+    post:
+      summary: Acquire an exclusive slot lease
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AcquireLockRequest'}
+      responses:
+        '200': {description: Lease acquired, content: {application/json: {schema: {$ref: '#/components/schemas/SlotLeaseEnvelope'}}}}
+        '409': {description: Slot unavailable or lock wait interrupted}
   /internal/v1/locks/{leaseId}:
     delete:
-      summary: Release an active lease after Team C compensation
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: leaseId, required: true, schema: {type: string}}]
-      responses: {'200': {description: Released}, '400': {description: Lease cannot be released}}
+      summary: Release an active lease after compensation or cancellation
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: leaseId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Released, content: {application/json: {schema: {$ref: '#/components/schemas/BooleanResultEnvelope'}}}}
+        '400': {description: Lease cannot be released}
   /internal/v1/locks/{leaseId}/commit:
     post:
       summary: Finalize lease after Team C authoritative commit
-      parameters: [{$ref: '#/components/parameters/Authorization'}, {in: path, name: leaseId, required: true, schema: {type: string}}]
-      responses: {'200': {description: Committed}, '400': {description: Lease cannot be committed}}
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: leaseId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Committed, content: {application/json: {schema: {$ref: '#/components/schemas/LeaseCommitEnvelope'}}}}
+        '400': {description: Lease cannot be committed}
+  /internal/v1/deadlocks/analyse:
+    post:
+      summary: Analyse a supplied wait-for graph
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeadlockAnalysisRequest'}
+      responses:
+        '200': {description: Deadlock analysis result, content: {application/json: {schema: {$ref: '#/components/schemas/DeadlockAnalysisEnvelope'}}}}
+  /internal/v1/slots:
+    post:
+      summary: Register an interview slot
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InterviewSlot'}
+      responses:
+        '201': {description: Slot registered, content: {application/json: {schema: {$ref: '#/components/schemas/InterviewSlotEnvelope'}}}}
+  /api/v1/metrics/eligibility:
+    get:
+      summary: Read runtime and eligibility metrics
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Runtime and eligibility metrics, content: {application/json: {schema: {$ref: '#/components/schemas/MetricsEnvelope'}}}}
+  /api/v1/stream/eligibility:
+    get:
+      summary: Subscribe to eligibility metrics
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Server-sent JSON events, content: {text/event-stream: {schema: {$ref: '#/components/schemas/MetricsEnvelope'}}}}
+  /api/v1/demo/batch-evaluation:
+    post:
+      summary: Submit a batch evaluation demo
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BatchEvaluationRequest'}
+      responses:
+        '201': {description: Batch accepted, content: {application/json: {schema: {$ref: '#/components/schemas/BatchEvaluationEnvelope'}}}}
+  /api/v1/demo/batch-evaluation/{batchId}:
+    get:
+      summary: Read batch evaluation results
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Batch result}
+        '404': {description: Batch not found}
+  /api/v1/demo/batch-evaluation/{batchId}/report:
+    get:
+      summary: Read a text batch report
+      parameters:
+        - {in: path, name: batchId, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Plain text report, content: {text/plain: {schema: {type: string}}}}
+        '404': {description: Batch not found}
+  /api/v1/demo/deadlock:
+    post:
+      summary: Run the controlled deadlock demonstration
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Demo result, content: {application/json: {schema: {$ref: '#/components/schemas/DeadlockDemoEnvelope'}}}}
+  /api/v1/demo/run:
+    post:
+      summary: Run the full OS engine demonstration
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '201': {description: Batch and deadlock demonstration results, content: {application/json: {schema: {$ref: '#/components/schemas/FullDemoEnvelope'}}}}
 components:
   parameters:
     Authorization: {in: header, name: Authorization, required: true, schema: {type: string, example: Bearer service-token}}
-    CorrelationId: {in: header, name: X-Correlation-ID, required: true, schema: {type: string}}
+    CorrelationId: {in: header, name: X-Correlation-ID, required: false, schema: {type: string}}
     IdempotencyKey: {in: header, name: Idempotency-Key, required: true, schema: {type: string}}
   schemas:
+    ApiError:
+      type: object
+      properties:
+        code: {type: string}
+        message: {type: string}
+        details: {type: array, items: {}}
+    ApiMeta:
+      type: object
+      properties:
+        correlation_id: {type: string}
+        api_version: {type: string, example: v1}
+    ErrorEnvelope:
+      type: object
+      properties:
+        error: {$ref: '#/components/schemas/ApiError'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    HealthEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status: {type: string, example: UP}
+            service: {type: string, example: Team A OS Engine}
+            timestamp: {type: string, format: date-time}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    ReadyEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status: {type: string, example: READY}
+            queue_strategy: {type: string}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
     EligibilityRequest:
       type: object
-      required: [applicationId, studentId, driveId, ruleSetVersion, student, ruleSet, chainingStrategy]
+      required: [application_id, student_id, drive_id, rule_set_version, student, rule_set]
       properties:
-        applicationId: {type: string, example: APP-001}
-        studentId: {type: string, example: STU001}
-        driveId: {type: string, example: DRV001}
-        ruleSetVersion: {type: string, example: v1}
+        application_id: {type: string, example: APP-001}
+        student_id: {type: string, example: STU001}
+        drive_id: {type: string, example: DRV001}
+        rule_set_version: {type: string, example: v1}
         priority: {type: integer, default: 1}
-        chainingStrategy: {type: string, enum: [sequential_and, weighted_priority, decision_tree]}
-        slotId: {type: string}
-        slotLeaseTtlSeconds: {type: integer, default: 300}
-        student: {type: object, required: [studentId, cgpa, backlogs, attendancePct, branch], properties: {studentId: {type: string}, cgpa: {type: number}, backlogs: {type: integer}, attendancePct: {type: number}, branch: {type: string}, skills: {type: array, items: {type: string}}}}
-        ruleSet: {type: object, required: [version, rules], properties: {version: {type: string}, rules: {type: array, minItems: 1, items: {type: object}}}}
+        chaining_strategy: {type: string, enum: [sequential_and, weighted_priority, decision_tree], default: sequential_and}
+        policy_parameters: {type: object, additionalProperties: true}
+        slot_id: {type: string}
+        slot_lease_ttl_seconds: {type: integer, default: 300}
+        student: {$ref: '#/components/schemas/StudentSnapshot'}
+        rule_set: {$ref: '#/components/schemas/RuleSet'}
+    StudentSnapshot:
+      type: object
+      required: [student_id, cgpa, backlogs, attendance_pct, branch]
+      properties:
+        student_id: {type: string}
+        cgpa: {type: number}
+        backlogs: {type: integer}
+        branch: {type: string}
+        attendance_pct: {type: number}
+        skills: {type: array, items: {type: string}}
+    RuleSet:
+      type: object
+      required: [version, rules]
+      properties:
+        version: {type: string}
+        rules: {type: array, minItems: 1, items: {$ref: '#/components/schemas/EligibilityRule'}}
+    EligibilityRule:
+      type: object
+      properties:
+        rule_id: {type: string}
+        rule_type: {type: string}
+        threshold: {}
+        weight: {type: number, default: 1.0}
+    QueueStatus:
+      type: object
+      properties:
+        application_id: {type: string}
+        request_id: {type: string}
+        queue_position: {type: integer}
+        state: {type: string}
+        estimated_evaluation_time_ms: {type: number}
+        accepted_policy: {type: string}
+        correlation_id: {type: string}
+        student_id: {type: string}
+        drive_id: {type: string}
+        decision_id: {type: string, nullable: true}
+        eligibility_result: {type: string, nullable: true, enum: [ELIGIBLE, CONDITIONAL, NOT_ELIGIBLE]}
+        slot_id: {type: string, nullable: true}
+        lease_id: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+        failed_rules: {type: array, items: {type: string}}
+        rule_set_version: {type: string}
+        submitted_at: {type: string, format: date-time}
+        processing_started_at: {type: string, format: date-time, nullable: true}
+        completed_at: {type: string, format: date-time, nullable: true}
+    DecisionMetrics:
+      type: object
+      properties:
+        evaluation_time_ms: {type: number}
+        rules_checked: {type: integer}
+    EligibilityDecision:
+      type: object
+      properties:
+        decision_id: {type: string}
+        request_id: {type: string}
+        application_id: {type: string, nullable: true}
+        correlation_id: {type: string, nullable: true}
+        lease_id: {type: string, nullable: true}
+        eligibility_result: {type: string, enum: [ELIGIBLE, CONDITIONAL, NOT_ELIGIBLE]}
+        failed_rules: {type: array, items: {type: string}}
+        rule_set_version: {type: string}
+        decision_metrics: {$ref: '#/components/schemas/DecisionMetrics'}
+    QueueStatusEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/QueueStatus'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    DecisionEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/EligibilityDecision'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    QueueSummaryEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            drive_id: {type: string}
+            current_depth: {type: integer}
+            strategy: {type: string}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    RuleEvaluationRequest:
+      type: object
+      required: [rule_set, student]
+      properties:
+        rule_set: {$ref: '#/components/schemas/RuleSet'}
+        student: {$ref: '#/components/schemas/StudentSnapshot'}
+        chaining_strategy: {type: string, enum: [sequential_and, weighted_priority, decision_tree]}
+        policy_parameters: {type: object, additionalProperties: true}
+    AcquireLockRequest:
+      type: object
+      required: [slot_id, student_id]
+      properties:
+        slot_id: {type: string}
+        student_id: {type: string}
+        ttl_seconds: {type: integer, default: 300}
+    SlotLease:
+      type: object
+      properties:
+        lease_id: {type: string}
+        slot_id: {type: string}
+        holder_id: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        status: {type: string}
+    SlotLeaseEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/SlotLease'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    BooleanResultEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            released: {type: boolean}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    LeaseCommitEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            committed: {type: boolean}
+            lease_id: {type: string}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    InterviewSlot:
+      type: object
+      properties:
+        slot_id: {type: string}
+        drive_id: {type: string}
+        date: {type: string}
+        start_time: {type: string}
+        end_time: {type: string}
+        capacity: {type: integer, default: 1}
+        current_holder: {type: string, nullable: true}
+        state: {type: string}
+    DeadlockAnalysisRequest:
+      type: object
+      properties:
+        wait_graph: {type: object, additionalProperties: {type: array, items: {type: string}}}
+    DeadlockResult:
+      type: object
+      properties:
+        deadlock_detected: {type: boolean}
+        deadlock_cycle: {type: array, items: {type: string}}
+        action: {type: string}
+    DeadlockAnalysisEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/DeadlockResult'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    InterviewSlotEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/InterviewSlot'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    Metrics:
+      type: object
+      properties:
+        queue_depth: {type: integer}
+        requests_queued: {type: integer}
+        requests_processing_started: {type: integer}
+        evaluations: {type: integer}
+        completed_requests: {type: integer}
+        failed_requests: {type: integer}
+        waiting_time_ms: {type: object, properties: {average: {type: number}, maximum: {type: number}}}
+        average_rule_evaluation_time_ms: {type: number}
+        decisions: {type: object, properties: {eligible: {type: integer}, rejected: {type: integer}, conditional: {type: integer}}}
+        anomalies: {type: object, properties: {deadlocks_detected: {type: integer}, deadlocks_resolved: {type: integer}, slot_allocation_conflicts: {type: integer}}}
+        slot_allocations: {type: object, properties: {successful: {type: integer}, failed: {type: integer}}}
+        lock_attempts: {type: integer}
+    MetricsEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/Metrics'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    BatchEvaluationRequest:
+      type: object
+      required: [drive_id, rule_set_version, rule_set, students]
+      properties:
+        drive_id: {type: string}
+        rule_set_version: {type: string}
+        rule_set: {$ref: '#/components/schemas/RuleSet'}
+        chaining_strategy: {type: string, default: sequential_and}
+        policy_parameters: {type: object, additionalProperties: true}
+        students:
+          type: array
+          items:
+            type: object
+            properties:
+              student: {$ref: '#/components/schemas/StudentSnapshot'}
+              priority: {type: integer, default: 1}
+              slot_id: {type: string}
+              slot_lease_ttl_seconds: {type: integer, default: 300}
+    BatchEvaluation:
+      type: object
+      properties:
+        batch_id: {type: string}
+        status: {type: string}
+        total_requests: {type: integer}
+        queue_strategy: {type: string}
+        summary: {type: object, additionalProperties: true}
+        metrics: {type: object, additionalProperties: true}
+        students:
+          type: array
+          items:
+            type: object
+            properties:
+              student_id: {type: string}
+              request_id: {type: string}
+              decision_id: {type: string, nullable: true}
+              state: {type: string}
+              result: {type: string, nullable: true}
+              slot_id: {type: string, nullable: true}
+              lease_id: {type: string, nullable: true}
+              error_message: {type: string, nullable: true}
+    BatchEvaluationEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/BatchEvaluation'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    DeadlockDemo:
+      type: object
+      properties:
+        deadlock_detected: {type: boolean}
+        cycle: {type: array, items: {type: string}}
+        recovery_action: {type: string}
+    DeadlockDemoEnvelope:
+      type: object
+      properties:
+        data: {$ref: '#/components/schemas/DeadlockDemo'}
+        meta: {$ref: '#/components/schemas/ApiMeta'}
+    FullDemoEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            batch: {$ref: '#/components/schemas/BatchEvaluation'}
+            deadlock_demo: {$ref: '#/components/schemas/DeadlockDemo'}
+            report_url: {type: string}
+        meta: {$ref: '#/components/schemas/ApiMeta'}

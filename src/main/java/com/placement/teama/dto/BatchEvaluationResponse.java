@@ -1,5 +1,7 @@
 package com.placement.teama.dto;
 
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.Builder;
 import lombok.Data;
 
@@ -8,6 +10,7 @@ import java.util.Map;
 
 @Data
 @Builder
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class BatchEvaluationResponse {
     private String batchId;
     private String status;
@@ -18,6 +21,7 @@ public class BatchEvaluationResponse {
     private List<StudentResult> students;
 
     @Data @Builder
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class StudentResult {
         private String studentId;
         private String requestId;

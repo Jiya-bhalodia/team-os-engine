@@ -18,6 +18,6 @@ public class HealthController {
     }
     @GetMapping("/ready")
     public ResponseEntity<ApiResponse<Map<String, Object>>> ready() {
-        return ResponseEntity.ok(ApiResponse.success(Map.of("status", "READY", "queueStrategy", queueService.getStrategyName()), "ready"));
+        return ResponseEntity.ok(ApiResponse.success(Map.of("status", "READY", "queue_strategy", queueService.getStrategyName()), "ready"));
     }
 }

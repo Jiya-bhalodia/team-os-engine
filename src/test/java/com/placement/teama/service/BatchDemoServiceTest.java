@@ -34,7 +34,7 @@ class BatchDemoServiceTest {
         assertEquals("COMPLETED", result.getStatus());
         assertEquals(20, result.getStudents().size());
         assertEquals(10, result.getSummary().get("eligible"));
-        assertEquals(10, result.getSummary().get("notEligible"));
+        assertEquals(10, result.getSummary().get("not_eligible"));
         assertTrue(result.getStudents().stream().allMatch(s -> s.getRequestId() != null && s.getDecisionId() != null));
     }
 
@@ -47,7 +47,7 @@ class BatchDemoServiceTest {
         BatchDemoService service = new BatchDemoService(queue,
                 new EligibilityLifecycleWorker(queue, new EligibilityService(), decisions, locks, telemetry),
                 locks, telemetry, decisions);
-        assertEquals(true, service.runDeadlockDemo().get("deadlockDetected"));
+        assertEquals(true, service.runDeadlockDemo().get("deadlock_detected"));
         assertEquals(1L, telemetry.getMetricsSummary(0).get("anomalies") instanceof java.util.Map<?, ?> m
                 ? m.get("deadlocks_detected") : -1L);
     }

@@ -1,5 +1,7 @@
 package com.placement.teama.dto;
 
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.placement.teama.model.enums.EligibilityResult;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -9,6 +11,7 @@ import java.util.List;
 @Data
 @Builder
 @AllArgsConstructor
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class EligibilityDecisionResponse {
     private String decisionId;
     private String requestId;
@@ -22,6 +25,7 @@ public class EligibilityDecisionResponse {
 
     @Data
     @AllArgsConstructor
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class DecisionMetrics {
         private double evaluationTimeMs;
         private int rulesChecked;

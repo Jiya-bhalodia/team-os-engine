@@ -129,7 +129,7 @@ public class LockController {
                     .body(ApiResponse.error("LEASE_COMMIT_FAILED",
                             "Invalid, expired, released, or committed lease", corrId));
         }
-        return ResponseEntity.ok(ApiResponse.success(Map.of("committed", true, "leaseId", leaseId), corrId));
+        return ResponseEntity.ok(ApiResponse.success(Map.of("committed", true, "lease_id", leaseId), corrId));
     }
 
 

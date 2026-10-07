@@ -63,8 +63,8 @@ public class EligibilityController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> getDriveQueue(@PathVariable String driveId,
             @RequestHeader(value = "X-Correlation-ID", required = false) String corrId) {
         if (corrId == null || corrId.isBlank()) corrId = "corr-" + java.util.UUID.randomUUID();
-        return ResponseEntity.ok(ApiResponse.success(Map.of("driveId", driveId,
-                "currentDepth", queueService.getDepthForDrive(driveId), "strategy", queueService.getStrategyName()), corrId));
+        return ResponseEntity.ok(ApiResponse.success(Map.of("drive_id", driveId,
+                "current_depth", queueService.getDepthForDrive(driveId), "strategy", queueService.getStrategyName()), corrId));
     }
 
     @PostMapping("/internal/v1/rules/evaluate")
