@@ -22,8 +22,13 @@ public class RuleHelper {
                 return false;
             }
         } else if ("allowed_branches".equalsIgnoreCase(type)) {
+            Object branchValues = rule.getAllowedValues() != null ? rule.getAllowedValues() : thresh;
+            if (!(branchValues instanceof List<?>)) {
+                failedMessages.add("Rule " + rule.getRuleId() + " must provide an allowed_values list");
+                return false;
+            }
             @SuppressWarnings("unchecked")
-            List<String> allowed = (List<String>) thresh;
+            List<String> allowed = (List<String>) branchValues;
             if (!allowed.contains(student.getBranch())) {
                 failedMessages.add("Branch " + student.getBranch() + " not in eligible list " + allowed);
                 return false;

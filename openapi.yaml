@@ -281,6 +281,7 @@ components:
         rule_id: {type: string}
         rule_type: {type: string}
         threshold: {}
+        allowed_values: {type: array, items: {type: string}, description: Branch allow-list used by allowed_branches rules}
         weight: {type: number, default: 1.0}
     QueueStatus:
       type: object

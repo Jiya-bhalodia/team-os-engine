@@ -19,6 +19,7 @@ import com.placement.teama.model.entity.StudentSnapshot;
 import com.placement.teama.model.enums.EligibilityResult;
 import com.placement.teama.model.enums.SlotState;
 import com.placement.teama.security.ServiceAuthenticationFilter;
+import com.placement.teama.service.EligibilityLifecycleWorker;
 import com.placement.teama.telemetry.TelemetryService;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.BeforeEach;
@@ -164,6 +165,56 @@ class SnakeCaseJsonContractTest {
                 .andExpect(jsonPath("$.data.decision_metrics.rules_checked").value(1))
                 .andExpect(jsonPath("$.data.decisionMetrics").doesNotExist())
                 .andExpect(jsonPath("$.meta.correlation_id").exists());
+    }
+
+    @Test
+    void completeSnakeCaseEligibilityRequestPassesAllowedBranch() throws Exception {
+        assertBranchRequestEvaluates("CSE", "ELIGIBLE", "branch-allowed-cse");
+    }
+
+    @Test
+    void completeSnakeCaseEligibilityRequestRejectsDisallowedBranch() throws Exception {
+        assertBranchRequestEvaluates("ECE", "NOT_ELIGIBLE", "branch-rejected-ece");
+    }
+
+    private void assertBranchRequestEvaluates(String branch, String expectedResult, String idempotencyKey)
+            throws Exception {
+        String body = """
+                {
+                  "application_id":"APP-%s",
+                  "student_id":"STU-%s",
+                  "drive_id":"DRV-BRANCH",
+                  "rule_set_version":"v1",
+                  "student":{"student_id":"STU-%s","cgpa":8.2,"backlogs":0,"attendance_pct":90,"branch":"%s","skills":["Java"]},
+                  "rule_set":{"version":"v1","rules":[{"rule_id":"R4","rule_type":"allowed_branches","allowed_values":["CSE"]}]},
+                  "chaining_strategy":"sequential_and"
+                }
+                """.formatted(branch, branch, branch, branch);
+
+        String accepted = eligibilityApi.perform(post("/api/v1/eligibility/requests")
+                        .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", idempotencyKey).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.state").value("QUEUED"))
+                .andReturn().getResponse().getContentAsString();
+        String requestId = objectMapper.readTree(accepted).path("data").path("request_id").asText();
+        assertFalse(requestId.isBlank());
+
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, eligibilityService, decisions,
+                new LockManager(), new TelemetryService());
+        worker.process(queue.getRequest(requestId));
+
+        String evaluated = eligibilityApi.perform(get("/api/v1/eligibility/requests/{requestId}", requestId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.eligibility_result").value(expectedResult))
+                .andExpect(jsonPath("$.data.error_message").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String decisionId = objectMapper.readTree(evaluated).path("data").path("decision_id").asText();
+        assertFalse(decisionId.isBlank());
+
+        eligibilityApi.perform(get("/api/v1/eligibility/decisions/{decisionId}", decisionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.eligibility_result").value(expectedResult))
+                .andExpect(jsonPath("$.data.rule_set_version").value("v1"));
     }
 
     @Test
