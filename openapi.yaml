@@ -278,12 +278,16 @@ components:
         rules: {type: array, minItems: 1, items: {$ref: '#/components/schemas/EligibilityRule'}}
     EligibilityRule:
       type: object
+      required: [rule_type]
       properties:
         rule_id: {type: string}
-        rule_type: {type: string}
-        threshold: {}
+        rule_type: {type: string, enum: [min_cgpa, max_backlogs, allowed_branches, min_attendance, required_skills]}
+        threshold:
+          description: >-
+            Required for min_cgpa, max_backlogs, min_attendance, and required_skills and must have the type specified by the rule.
+            For allowed_branches, provide either a string array here for legacy clients or use allowed_values.
         allowed_values: {type: array, items: {type: string}, description: Branch allow-list used by allowed_branches rules}
-        weight: {type: number, default: 1.0}
+        weight: {type: number, exclusiveMinimum: 0, default: 1.0, description: Positive finite scoring weight; omitted values default to 1.0.}
     QueueStatus:
       type: object
       properties:

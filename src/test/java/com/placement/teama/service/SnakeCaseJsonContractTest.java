@@ -177,6 +177,89 @@ class SnakeCaseJsonContractTest {
         assertBranchRequestEvaluates("ECE", "NOT_ELIGIBLE", "branch-rejected-ece");
     }
 
+    @Test
+    void lowCgpaAndBacklogsThroughSnakeCaseIntakeRejectBeforeSlotOrCallback() throws Exception {
+        String body = """
+                {
+                  "application_id":"APP-HARD-FAIL-1",
+                  "student_id":"STU-TEST-102",
+                  "drive_id":"DRV-TEST-102",
+                  "rule_set_version":"v1",
+                  "student":{"student_id":"STU-TEST-102","cgpa":5.0,"backlogs":3,"attendance_pct":60,"branch":"CSE","skills":["Java"]},
+                  "rule_set":{"version":"v1","rules":[
+                    {"rule_id":"R-CGPA","rule_type":"min_cgpa","threshold":7.5},
+                    {"rule_id":"R-BACKLOGS","rule_type":"max_backlogs","threshold":0}
+                  ]},
+                  "chaining_strategy":"sequential_and",
+                  "slot_id":"SLOT-HARD-FAIL-1"
+                }
+                """;
+        String accepted = eligibilityApi.perform(post("/api/v1/eligibility/requests")
+                        .contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "hard-fail-snake-1")
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String requestId = objectMapper.readTree(accepted).path("data").path("request_id").asText();
+
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-HARD-FAIL-1").driveId("DRV-TEST-102")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        java.util.concurrent.atomic.AtomicInteger callbackCount = new java.util.concurrent.atomic.AtomicInteger();
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, eligibilityService, decisions,
+                locks, new TelemetryService(), new TeamCDecisionCallback() {
+                    @Override
+                    public void deliver(String applicationId, EligibilityDecisionResponse decision, String correlationId) {
+                        callbackCount.incrementAndGet();
+                    }
+                    @Override public boolean isEnabled() { return true; }
+                });
+        worker.process(queue.getRequest(requestId));
+
+        String statusBody = eligibilityApi.perform(get("/api/v1/eligibility/requests/{requestId}", requestId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.eligibility_result").value("NOT_ELIGIBLE"))
+                .andExpect(jsonPath("$.data.failed_rules.length()").value(2))
+                .andExpect(jsonPath("$.data.lease_id").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        String decisionId = objectMapper.readTree(statusBody).path("data").path("decision_id").asText();
+        eligibilityApi.perform(get("/api/v1/eligibility/decisions/{decisionId}", decisionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.failed_rules[0]").value("CGPA 5.0 is below required cutoff of 7.5"))
+                .andExpect(jsonPath("$.data.failed_rules[1]").value("Backlogs 3 exceeds allowed limit of 0"))
+                .andExpect(jsonPath("$.data.decision_metrics.rules_checked").value(2));
+        assertEquals(0, callbackCount.get());
+        SlotLease availableLease = locks.acquireSlotLock("SLOT-HARD-FAIL-1", "CHECK-STUDENT", 60);
+        assertNotNull(availableLease, "ineligible evaluation must not consume the registered slot");
+        assertTrue(locks.releaseSlotLock(availableLease.getLeaseId()));
+    }
+
+    @Test
+    void invalidRuleDefinitionsAreRejectedBeforeQueueing() throws Exception {
+        String validRuleBody = """
+                {"application_id":"APP-INVALID-RULE","student_id":"STU-INVALID-RULE","drive_id":"DRV-1",
+                 "rule_set_version":"v1",
+                 "student":{"student_id":"STU-INVALID-RULE","cgpa":8.0,"backlogs":0,"attendance_pct":90,"branch":"CSE","skills":["Java"]},
+                 "rule_set":{"version":"v1","rules":[{"rule_id":"R1","rule_type":"min_cgpa","threshold":7.0}]},
+                 "slot_id":"SLOT-INVALID-RULE"}
+                """;
+        List<String> invalidBodies = List.of(
+                validRuleBody.replace("\"rule_type\":\"min_cgpa\",", ""),
+                validRuleBody.replace("min_cgpa", "minCgpa"),
+                validRuleBody.replace(",\"threshold\":7.0", ""),
+                validRuleBody.replace("\"threshold\":7.0", "\"threshold\":\"7.0\"")
+        );
+        int index = 0;
+        for (String body : invalidBodies) {
+            eligibilityApi.perform(post("/api/v1/eligibility/requests")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .header("Idempotency-Key", "invalid-rule-" + index++).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.message").isNotEmpty())
+                    .andExpect(jsonPath("$.error.details[0].reason").isNotEmpty());
+        }
+        assertEquals(0, queue.getDepth(), "invalid rule requests must not enter the queue");
+    }
+
     private void assertBranchRequestEvaluates(String branch, String expectedResult, String idempotencyKey)
             throws Exception {
         String body = """
@@ -315,7 +398,7 @@ class SnakeCaseJsonContractTest {
         assertFalse(leaseJson.has("leaseId"));
 
         StudentSnapshot student = StudentSnapshot.builder().studentId("STU-1").cgpa(8.0).backlogs(0)
-                .branch("CSE").attendancePct(90).skills(List.of("Java")).build();
+                .branch("CSE").attendancePct(90.0).skills(List.of("Java")).build();
         JsonNode studentJson = objectMapper.valueToTree(student);
         assertTrue(studentJson.has("student_id"));
         assertTrue(studentJson.has("attendance_pct"));
