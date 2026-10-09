@@ -274,11 +274,14 @@ class SnakeCaseJsonContractTest {
 
     @Test
     void queueHealthAndDeadlockMapResponsesUseSnakeCase() throws Exception {
-        MockMvc healthApi = MockMvcBuilders.standaloneSetup(new HealthController(queue)).build();
+        MockMvc healthApi = MockMvcBuilders.standaloneSetup(new HealthController(queue, "test-build")).build();
         healthApi.perform(get("/ready"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.queue_strategy").exists())
                 .andExpect(jsonPath("$.data.queueStrategy").doesNotExist());
+        healthApi.perform(get("/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.build_version").value("test-build"));
 
         eligibilityApi.perform(get("/api/v1/drives/{driveId}/queue", "DRV-1"))
                 .andExpect(status().isOk())

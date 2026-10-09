@@ -92,6 +92,128 @@ class EligibilityLifecycleWorkerTest {
     }
 
     @Test
+    void unknownSlotFailsWithoutLeaseOrCallback() {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicInteger callbackCount = new AtomicInteger();
+        EligibilityRequestEntity request = queue.enqueue("APP-UNKNOWN", "STU-UNKNOWN", "DRIVE-1", "v1", 1,
+                "corr-unknown", "key-unknown", details(student(8.5, 0), rules(), "MISSING-SLOT"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), new LockManager(), new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+
+        assertEquals(RequestState.FAILED, request.getState());
+        assertNull(request.getLeaseId());
+        assertEquals(0, callbackCount.get());
+    }
+
+    @Test
+    void acquisitionExceptionFailsWithoutLeaseOrCallback() {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicInteger callbackCount = new AtomicInteger();
+        LockManager locks = new LockManager() {
+            @Override
+            public com.placement.teama.model.entity.SlotLease acquireSlotLock(String slotId, String studentId,
+                                                                               int ttlSeconds) {
+                throw new IllegalStateException("test acquisition failure");
+            }
+        };
+        EligibilityRequestEntity request = queue.enqueue("APP-ERROR", "STU-ERROR", "DRIVE-1", "v1", 1,
+                "corr-error", "key-error", details(student(8.5, 0), rules(), "SLOT-1"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), locks, new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+
+        assertEquals(RequestState.FAILED, request.getState());
+        assertNull(request.getLeaseId());
+        assertEquals(0, callbackCount.get());
+    }
+
+    @Test
+    void interruptedAcquisitionRestoresInterruptAndDoesNotCallback() {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicInteger callbackCount = new AtomicInteger();
+        LockManager locks = new LockManager() {
+            @Override
+            public com.placement.teama.model.entity.SlotLease acquireSlotLock(String slotId, String studentId,
+                                                                               int ttlSeconds) throws InterruptedException {
+                throw new InterruptedException("test interruption");
+            }
+        };
+        EligibilityRequestEntity request = queue.enqueue("APP-INT", "STU-INT", "DRIVE-1", "v1", 1,
+                "corr-int", "key-int", details(student(8.5, 0), rules(), "SLOT-1"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), locks, new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        Thread.interrupted();
+        try {
+            worker.process(request);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertEquals(RequestState.FAILED, request.getState());
+            assertNull(request.getLeaseId());
+            assertEquals(0, callbackCount.get());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void leaseIsReleasedWhenProcessingFailsAfterAcquisition() throws InterruptedException {
+        QueueService queue = new QueueService("fifo", 10);
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-FAIL-LATER").driveId("DRIVE-1")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        AtomicInteger callbackCount = new AtomicInteger();
+        TelemetryService telemetry = new TelemetryService() {
+            @Override
+            public synchronized void recordSlotAllocation(boolean successful) {
+                if (successful) throw new IllegalStateException("test post-acquisition failure");
+                super.recordSlotAllocation(false);
+            }
+        };
+        EligibilityRequestEntity request = queue.enqueue("APP-LATER", "STU-LATER", "DRIVE-1", "v1", 1,
+                "corr-later", "key-later", details(student(8.5, 0), rules(), "SLOT-FAIL-LATER"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), locks, telemetry,
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+
+        assertEquals(RequestState.FAILED, request.getState());
+        assertNull(request.getLeaseId());
+        assertEquals(0, callbackCount.get());
+        assertNotNull(locks.acquireSlotLock("SLOT-FAIL-LATER", "NEXT-STUDENT", 60));
+    }
+
+    @Test
+    void duplicateProcessingDoesNotCreateAnotherLeaseOrCallback() {
+        QueueService queue = new QueueService("fifo", 10);
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-ONCE").driveId("DRIVE-1")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        AtomicInteger callbackCount = new AtomicInteger();
+        EligibilityRequestEntity request = queue.enqueue("APP-ONCE", "STU-ONCE", "DRIVE-1", "v1", 1,
+                "corr-once", "key-once", details(student(8.5, 0), rules(), "SLOT-ONCE"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), locks, new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+        String firstDecisionId = request.getDecisionId();
+        String firstLeaseId = request.getLeaseId();
+        worker.process(request);
+
+        assertEquals(RequestState.ALLOCATED, request.getState());
+        assertEquals(firstDecisionId, request.getDecisionId());
+        assertEquals(firstLeaseId, request.getLeaseId());
+        assertEquals(1, callbackCount.get());
+    }
+
+    @Test
     void eligibleRequestIsEvaluatedStoredAndAllocated() {
         QueueService queue = new QueueService("fifo", 10);
         DecisionStoreService decisions = new DecisionStoreService();

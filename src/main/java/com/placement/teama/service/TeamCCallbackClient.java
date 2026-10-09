@@ -67,15 +67,17 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
         }
         if (existing == null) {
             if (initialStatus == DeliveryStatus.BLOCKED_MISSING_LEASE) {
-                log.warn("Team C callback blocked: decision_id={}, reason=required_lease_unavailable", key);
+                log.warn("Team C callback blocked: request_id={}, correlation_id={}, decision_id={}, callback_outcome=SKIPPED, reason=required_lease_unavailable",
+                        decision.getRequestId(), correlationId, key);
                 return;
             }
             try {
-                executor.submit(() -> sendWithRetry(applicationId, key, correlationId, body, candidate));
+                executor.submit(() -> sendWithRetry(applicationId, decision.getRequestId(), key,
+                        correlationId, body, candidate));
             } catch (RuntimeException ex) {
                 candidate.setStatus(DeliveryStatus.FAILED_TO_SCHEDULE);
-                log.warn("Team C callback could not be scheduled: decision_id={}, error={}",
-                        key, ex.getClass().getSimpleName());
+                log.warn("Team C callback could not be scheduled: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, error_type={}",
+                        decision.getRequestId(), correlationId, key, ex.getClass().getSimpleName());
             }
         }
     }
@@ -91,7 +93,7 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
         return delivery == null ? null : delivery.getStatus();
     }
 
-    private void sendWithRetry(String applicationId, String decisionId, String correlationId, String body,
+    private void sendWithRetry(String applicationId, String requestId, String decisionId, String correlationId, String body,
                                Delivery delivery) {
         URI uri = callbackUri(applicationId);
         for (int attempt = 1; attempt <= properties.getMaxAttempts(); attempt++) {
@@ -111,33 +113,38 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
                 int status = response.statusCode();
                 if (status >= 200 && status < 300) {
                     delivery.setStatus(DeliveryStatus.DELIVERED);
-                    log.info("Team C callback delivered: decision_id={}, status={}", decisionId, status);
+                    log.info("Team C callback delivered: request_id={}, correlation_id={}, decision_id={}, callback_outcome=DELIVERED, status={}",
+                            requestId, correlationId, decisionId, status);
                     return;
                 }
                 if (status < 500 || status > 599) {
                     delivery.setStatus(DeliveryStatus.REJECTED_PERMANENTLY);
-                    log.warn("Team C callback rejected: decision_id={}, status={}, retryable=false", decisionId, status);
+                    log.warn("Team C callback rejected: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, status={}, retryable=false",
+                            requestId, correlationId, decisionId, status);
                     return;
                 }
-                log.warn("Team C callback failed: decision_id={}, status={}, attempt={}", decisionId, status, attempt);
+                log.warn("Team C callback failed: request_id={}, correlation_id={}, decision_id={}, callback_outcome=RETRYING, status={}, attempt={}",
+                        requestId, correlationId, decisionId, status, attempt);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 delivery.setStatus(DeliveryStatus.FAILED_INTERRUPTED);
-                log.warn("Team C callback interrupted: decision_id={}, attempt={}", decisionId, attempt);
+                log.warn("Team C callback interrupted: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, attempt={}",
+                        requestId, correlationId, decisionId, attempt);
                 return;
             } catch (IOException ex) {
-                log.warn("Team C callback transport failure: decision_id={}, error={}, attempt={}",
-                        decisionId, ex.getClass().getSimpleName(), attempt);
+                log.warn("Team C callback transport failure: request_id={}, correlation_id={}, decision_id={}, callback_outcome=RETRYING, error_type={}, attempt={}",
+                        requestId, correlationId, decisionId, ex.getClass().getSimpleName(), attempt);
             } catch (RuntimeException ex) {
                 delivery.setStatus(DeliveryStatus.FAILED_PERMANENTLY);
-                log.warn("Team C callback failure: decision_id={}, error={}, attempt={}",
-                        decisionId, ex.getClass().getSimpleName(), attempt);
+                log.warn("Team C callback failure: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, error_type={}, attempt={}",
+                        requestId, correlationId, decisionId, ex.getClass().getSimpleName(), attempt);
                 return;
             }
             if (attempt < properties.getMaxAttempts()) pauseBeforeRetry();
         }
         delivery.setStatus(DeliveryStatus.FAILED_RETRIES_EXHAUSTED);
-        log.error("Team C callback delivery exhausted retries: decision_id={}", decisionId);
+        log.error("Team C callback delivery exhausted retries: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, reason=retries_exhausted",
+                requestId, correlationId, decisionId);
     }
 
     private void pauseBeforeRetry() {

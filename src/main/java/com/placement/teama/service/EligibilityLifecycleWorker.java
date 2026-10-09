@@ -54,7 +54,19 @@ public class EligibilityLifecycleWorker {
 
     /** Public for deterministic integration tests and a future managed executor. */
     public void process(EligibilityRequestEntity request) {
+        synchronized (request) {
+            if (request.getCompletedAt() != null) {
+                log.info("Eligibility processing skipped: request_id={}, correlation_id={}, reason=already_completed",
+                        request.getRequestId(), request.getCorrelationId());
+                return;
+            }
+            processOnce(request);
+        }
+    }
+
+    private void processOnce(EligibilityRequestEntity request) {
         EligibilityDecisionResponse completedDecision = null;
+        SlotLease acquiredLease = null;
         request.setState(RequestState.PROCESSING);
         request.setProcessingStartedAt(Instant.now());
         telemetryService.recordProcessingStarted();
@@ -67,6 +79,10 @@ public class EligibilityLifecycleWorker {
             decision.setRequestId(request.getRequestId());
             decision.setApplicationId(request.getApplicationId());
             decision.setCorrelationId(request.getCorrelationId());
+            boolean slotIdPresent = request.getSlotId() != null && !request.getSlotId().isBlank();
+            log.info("Eligibility decision evaluated: request_id={}, correlation_id={}, decision_id={}, result={}, slot_id_present={}",
+                    request.getRequestId(), request.getCorrelationId(), decision.getDecisionId(),
+                    decision.getEligibilityResult(), slotIdPresent);
             request.setFailedRules(decision.getFailedRules());
             decisionStoreService.save(decision);
             completedDecision = decision;
@@ -77,6 +93,8 @@ public class EligibilityLifecycleWorker {
                     decision.getDecisionMetrics().getEvaluationTimeMs(), waitTime(request));
 
             if (decision.getEligibilityResult() == EligibilityResult.NOT_ELIGIBLE) {
+                log.info("Slot lease not required: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=NOT_REQUIRED_FOR_RESULT",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
                 request.setState(RequestState.NOT_ELIGIBLE);
                 request.setCompletedAt(Instant.now());
                 telemetryService.recordCompleted();
@@ -84,20 +102,40 @@ public class EligibilityLifecycleWorker {
             }
             if (decision.getEligibilityResult() == EligibilityResult.CONDITIONAL) {
                 // Team C resolves waitlist/conditional outcomes; Team A must not lease a slot.
+                log.info("Slot lease not attempted: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=NOT_REQUIRED_FOR_RESULT",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
                 request.setCompletedAt(Instant.now());
                 telemetryService.recordCompleted();
                 return;
             }
             if (request.getSlotId() == null || request.getSlotId().isBlank()) {
+                log.warn("Slot lease not acquired: request_id={}, correlation_id={}, decision_id={}, slot_id_present=false, acquisition_outcome=NOT_ATTEMPTED_NO_SLOT_ID",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
                 request.setCompletedAt(Instant.now());
                 telemetryService.recordCompleted();
                 return;
             }
             request.setState(RequestState.SLOT_ALLOCATION_PENDING);
             telemetryService.recordLockAttempt();
-            SlotLease lease = lockManager.acquireSlotLock(request.getSlotId(), request.getStudentId(),
-                    request.getSlotLeaseTtlSeconds() == null ? 300 : request.getSlotLeaseTtlSeconds());
+            log.info("Slot lease acquisition started: request_id={}, correlation_id={}, decision_id={}, slot_id_present=true",
+                    request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
+            SlotLease lease;
+            try {
+                lease = lockManager.acquireSlotLock(request.getSlotId(), request.getStudentId(),
+                        request.getSlotLeaseTtlSeconds() == null ? 300 : request.getSlotLeaseTtlSeconds());
+            } catch (InterruptedException ex) {
+                log.warn("Slot lease acquisition ended: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=INTERRUPTED",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
+                Thread.currentThread().interrupt();
+                throw ex;
+            } catch (RuntimeException ex) {
+                log.warn("Slot lease acquisition ended: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=ERROR, error_type={}",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId(), ex.getClass().getSimpleName());
+                throw ex;
+            }
             if (lease == null) {
+                log.warn("Slot lease acquisition ended: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=UNAVAILABLE",
+                        request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
                 request.setState(RequestState.FAILED);
                 request.setErrorMessage("Interview slot is unavailable" + lockManager.deadlockSuffix());
                 request.setCompletedAt(Instant.now());
@@ -107,6 +145,9 @@ public class EligibilityLifecycleWorker {
                 telemetryService.recordCompleted();
                 return;
             }
+            acquiredLease = lease;
+            log.info("Slot lease acquisition ended: request_id={}, correlation_id={}, decision_id={}, acquisition_outcome=ACQUIRED",
+                    request.getRequestId(), request.getCorrelationId(), decision.getDecisionId());
             request.setLeaseId(lease.getLeaseId());
             decision.setLeaseId(lease.getLeaseId());
             decisionStoreService.save(decision);
@@ -115,6 +156,26 @@ public class EligibilityLifecycleWorker {
             telemetryService.recordSlotAllocation(true);
             telemetryService.recordCompleted();
         } catch (Exception ex) {
+            if (acquiredLease != null) {
+                boolean released;
+                try {
+                    released = lockManager.releaseSlotLock(acquiredLease.getLeaseId());
+                } catch (RuntimeException releaseError) {
+                    released = false;
+                    log.error("Slot lease release failed after processing failure: request_id={}, correlation_id={}, decision_id={}, error_type={}",
+                            request.getRequestId(), request.getCorrelationId(),
+                            completedDecision == null ? null : completedDecision.getDecisionId(),
+                            releaseError.getClass().getSimpleName());
+                }
+                request.setLeaseId(null);
+                if (completedDecision != null) {
+                    completedDecision.setLeaseId(null);
+                    decisionStoreService.save(completedDecision);
+                }
+                log.warn("Slot lease released after processing failure: request_id={}, correlation_id={}, decision_id={}, release_succeeded={}",
+                        request.getRequestId(), request.getCorrelationId(),
+                        completedDecision == null ? null : completedDecision.getDecisionId(), released);
+            }
             request.setState(RequestState.FAILED);
             request.setErrorMessage(ex.getMessage());
             request.setCompletedAt(Instant.now());
@@ -122,16 +183,24 @@ public class EligibilityLifecycleWorker {
             telemetryService.recordCompleted();
         } finally {
             if (completedDecision != null && request.getCompletedAt() != null && teamCCallback.isEnabled()) {
-                if (completedDecision.getLeaseId() == null || completedDecision.getLeaseId().isBlank()) {
-                    recordCallbackMissingLease(request);
-                    log.warn("Team C callback not sent: decision_id={}, reason=required_lease_unavailable",
-                            completedDecision.getDecisionId());
+                boolean allocatedWithLease = request.getState() == RequestState.ALLOCATED
+                        && request.getLeaseId() != null && !request.getLeaseId().isBlank()
+                        && request.getLeaseId().equals(completedDecision.getLeaseId());
+                if (!allocatedWithLease) {
+                    boolean leaseRequiredForDecision = completedDecision.getEligibilityResult() == EligibilityResult.ELIGIBLE;
+                    String reason = leaseRequiredForDecision ? "required_lease_unavailable" : "result_does_not_allocate_slot";
+                    if (leaseRequiredForDecision) recordCallbackMissingLease(request);
+                    log.warn("Team C callback skipped: request_id={}, correlation_id={}, decision_id={}, result={}, callback_outcome=SKIPPED, reason={}, request_state={}",
+                            request.getRequestId(), request.getCorrelationId(), completedDecision.getDecisionId(),
+                            completedDecision.getEligibilityResult(), reason, request.getState());
                 } else {
                     try {
                         teamCCallback.deliver(request.getApplicationId(), completedDecision, request.getCorrelationId());
+                        log.info("Team C callback submitted: request_id={}, correlation_id={}, decision_id={}, callback_outcome=SUBMITTED",
+                                request.getRequestId(), request.getCorrelationId(), completedDecision.getDecisionId());
                     } catch (RuntimeException ex) {
-                        log.warn("Could not schedule Team C callback: decision_id={}, error={}",
-                                completedDecision.getDecisionId(), ex.getClass().getSimpleName());
+                        log.warn("Team C callback submission failed: request_id={}, correlation_id={}, decision_id={}, callback_outcome=FAILED, error_type={}",
+                                request.getRequestId(), request.getCorrelationId(), completedDecision.getDecisionId(), ex.getClass().getSimpleName());
                     }
                 }
             }

@@ -80,3 +80,42 @@ Non-HTTPS URLs are rejected except localhost URLs used by tests.
    record, then verify duplicate suppression and retry behavior in the local
    tests. Do not use a fabricated lease or an unapproved production application.
 5. Enable production delivery only after the test and contract are approved.
+
+## Team A slot lifecycle and local smoke request
+
+`slot_id` remains optional on `POST /api/v1/eligibility/requests` for existing
+callers. For an eligible request that needs a Team C callback, the caller must
+register a slot in the same running Team A process and include that exact
+`slot_id`. Slot registration and leases are in memory, so a restart clears
+them. The lock manager atomically rejects an unknown or unavailable slot during
+acquisition. Team A does not fabricate a lease or send the callback when that
+acquisition fails. Ineligible and conditional results do not allocate slots;
+their callbacks are skipped because Team C's current callback contract requires
+`lease_id`.
+
+Register a test slot first (include the Authorization header only when
+`TEAM_A_SERVICE_TOKEN` is configured):
+
+```sh
+curl -i -X POST "http://localhost:8000/internal/v1/slots" \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-ID: corr-slot-smoke-1" \
+  -d '{"slot_id":"SLOT-SMOKE-1","drive_id":"DRIVE-SMOKE-1","date":"2026-10-10","start_time":"10:00","end_time":"10:30","capacity":1,"state":"AVAILABLE"}'
+```
+
+Then submit an eligible request using the registered slot (replace the
+idempotency key for each new request):
+
+```sh
+curl -i -X POST "http://localhost:8000/api/v1/eligibility/requests" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: smoke-eligible-slot-001" \
+  -H "X-Correlation-ID: corr-eligibility-smoke-1" \
+  -d '{"application_id":"APP-SMOKE-1","student_id":"STU-SMOKE-1","drive_id":"DRIVE-SMOKE-1","rule_set_version":"v1","priority":1,"student":{"student_id":"STU-SMOKE-1","cgpa":8.5,"backlogs":0,"attendance_pct":90,"branch":"CSE","skills":["Java"]},"rule_set":{"version":"v1","rules":[{"rule_id":"R1","rule_type":"min_cgpa","threshold":7.5},{"rule_id":"R2","rule_type":"max_backlogs","threshold":0}]},"chaining_strategy":"sequential_and","slot_id":"SLOT-SMOKE-1","slot_lease_ttl_seconds":300}'
+```
+
+If service authentication is enabled, add `-H "Authorization: Bearer $TEAM_A_SERVICE_TOKEN"`
+to both commands; do not paste the token into shared logs or source files. To
+confirm which build is running, inspect `data.build_version` in `GET /health`.
+On Render, this uses the non-secret `RENDER_GIT_COMMIT` value and falls back to
+`unknown` when unavailable.

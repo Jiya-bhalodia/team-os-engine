@@ -234,6 +234,7 @@ components:
             status: {type: string, example: UP}
             service: {type: string, example: Team A OS Engine}
             timestamp: {type: string, format: date-time}
+            build_version: {type: string, example: 5db4f70}
         meta: {$ref: '#/components/schemas/ApiMeta'}
     ReadyEnvelope:
       type: object
