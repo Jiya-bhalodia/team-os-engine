@@ -94,8 +94,11 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
                 HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                         .timeout(properties.getReadTimeout())
                         .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer " + properties.getToken())
                         .POST(HttpRequest.BodyPublishers.ofString(body));
+                String token = properties.getToken();
+                if (token != null && !token.isBlank()) {
+                    builder.header("Authorization", "Bearer " + token);
+                }
                 if (correlationId != null && !correlationId.isBlank()) {
                     builder.header("X-Correlation-ID", correlationId);
                 }
@@ -161,9 +164,6 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
         if ((!secure && !localTest) || base.getHost() == null || base.getUserInfo() != null
                 || base.getQuery() != null || base.getFragment() != null) {
             throw new IllegalArgumentException("Team C callback URL must be HTTPS (HTTP is allowed only for localhost tests)");
-        }
-        if (properties.getToken() == null || properties.getToken().isBlank()) {
-            throw new IllegalArgumentException("TEAM_C_CALLBACK_TOKEN is required when Team C callback is enabled");
         }
     }
 

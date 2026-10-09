@@ -85,14 +85,38 @@ class TeamCCallbackClientTest {
     }
 
     @Test
-    void missingRequiredConfigurationFailsWhenEnabled() throws Exception {
-        TeamCCallbackProperties missingToken = enabledProperties("https://team-c.example", "test-token");
-        missingToken.setToken("");
-        assertThrows(IllegalArgumentException.class, () -> new TeamCCallbackClient(missingToken, new ObjectMapper()));
-
+    void missingBaseUrlFailsWhenEnabledButTokenIsOptional() throws Exception {
         TeamCCallbackProperties missingBaseUrl = enabledProperties("", "test-token");
         missingBaseUrl.setBaseUrl("");
         assertThrows(IllegalArgumentException.class, () -> new TeamCCallbackClient(missingBaseUrl, new ObjectMapper()));
+
+        TeamCCallbackProperties noToken = enabledProperties("https://team-c.example", "");
+        TeamCCallbackClient noTokenClient = new TeamCCallbackClient(noToken, new ObjectMapper());
+        noTokenClient.close();
+    }
+
+    @Test
+    void blankTokenSendsCallbackWithoutAuthorizationHeader() throws Exception {
+        AtomicInteger received = new AtomicInteger();
+        AtomicReference<String> authorization = new AtomicReference<>("not-checked");
+        CountDownLatch latch = new CountDownLatch(1);
+        startServer(exchange -> {
+            received.incrementAndGet();
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+            latch.countDown();
+        });
+        TeamCCallbackProperties noToken = properties(2, 500, 0);
+        noToken.setToken("  ");
+        client = new TeamCCallbackClient(noToken, new ObjectMapper());
+
+        client.deliver("APP", decision("DEC-no-token", EligibilityResult.ELIGIBLE, "LEASE-real"), null);
+
+        assertTrue(latch.await(2, TimeUnit.SECONDS));
+        assertEquals(1, received.get());
+        assertNull(authorization.get());
+        assertEquals(TeamCCallbackClient.DeliveryStatus.DELIVERED, client.getDeliveryStatus("DEC-no-token"));
     }
 
     @Test

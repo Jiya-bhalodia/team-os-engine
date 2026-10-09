@@ -36,12 +36,12 @@ them into IDs. The supported `result` values are `ELIGIBLE`, `CONDITIONAL`, and
 
 ## Authentication
 
-When enabled, Team A sends `Authorization: Bearer <TEAM_C_CALLBACK_TOKEN>` and
-`Content-Type: application/json`; it includes the originating `X-Correlation-ID`
-when present. Bearer-token support still needs confirmation from Team C's
-deployed callback handler. Team A does not assume the currently deployed route
-supports this authentication. Keep delivery disabled until Team C confirms the
-required auth scheme and shares a token through a secure channel.
+When enabled, Team A sends `Content-Type: application/json` and includes the
+originating `X-Correlation-ID` when present. Team C accepts direct unauthenticated
+requests, so `TEAM_C_CALLBACK_TOKEN` is optional. If it is nonblank, Team A also
+sends `Authorization: Bearer <TEAM_C_CALLBACK_TOKEN>`; if blank or missing, Team A
+omits the `Authorization` header. Keep any configured token in a secret store,
+never in source control.
 
 ## Delivery and reliability
 
@@ -57,16 +57,16 @@ callbacks, and exhausted failures are not retried later automatically.
 
 ## Configuration required before enabling
 
-- `TEAM_C_CALLBACK_ENABLED=false` by default; keep false until Team C confirms the route, auth, and no-lease handling.
+- `TEAM_C_CALLBACK_ENABLED=false` by default; keep false until Team C confirms the route and no-lease handling.
 - `TEAM_C_BASE_URL` — confirmed Team C HTTPS base URL, without the callback path.
-- `TEAM_C_CALLBACK_TOKEN` — bearer secret shared securely by Team C; never commit it.
+- `TEAM_C_CALLBACK_TOKEN` — optional bearer secret; if supplied, share securely and never commit it.
 - `TEAM_C_CONNECT_TIMEOUT=2s` by default.
 - `TEAM_C_READ_TIMEOUT=5s` by default.
 - `TEAM_C_CALLBACK_MAX_ATTEMPTS=3` by default; maximum `10`.
 - `TEAM_C_CALLBACK_RETRY_BACKOFF=250ms` by default.
 
-If delivery is enabled, the base URL and token are required. Non-HTTPS URLs are
-rejected except localhost URLs used by tests.
+If delivery is enabled, the base URL is required. The token is optional.
+Non-HTTPS URLs are rejected except localhost URLs used by tests.
 
 ## Safe testing sequence
 
