@@ -7,15 +7,39 @@ import com.placement.teama.model.entity.InterviewSlot;
 import com.placement.teama.model.entity.RuleSet;
 import com.placement.teama.model.entity.StudentSnapshot;
 import com.placement.teama.model.enums.RequestState;
+import com.placement.teama.model.enums.EligibilityResult;
 import com.placement.teama.model.enums.SlotState;
 import com.placement.teama.telemetry.TelemetryService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class EligibilityLifecycleWorkerTest {
+    @Test
+    void callbackRunsAfterCompletedDecisionAndCarriesOnlyRealLease() {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicBoolean callbackCalled = new AtomicBoolean();
+        EligibilityRequestEntity request = queue.enqueue("STU-1", "DRIVE-1", "v1", 1, "corr", "key",
+                details(student(8.5, 0), rules(), null));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), new LockManager(), new TelemetryService(), (applicationId, decision, correlationId) -> {
+                    assertNotNull(request.getCompletedAt());
+                    assertEquals("APP-1", applicationId);
+                    assertEquals(request.getRequestId(), decision.getRequestId());
+                    assertEquals(EligibilityResult.ELIGIBLE, decision.getEligibilityResult());
+                    assertNull(decision.getLeaseId());
+                    callbackCalled.set(true);
+                });
+        request.setApplicationId("APP-1");
+
+        worker.process(request);
+
+        assertTrue(callbackCalled.get());
+    }
+
     @Test
     void eligibleRequestIsEvaluatedStoredAndAllocated() {
         QueueService queue = new QueueService("fifo", 10);

@@ -8,6 +8,9 @@ import com.placement.teama.model.enums.EligibilityResult;
 import com.placement.teama.model.enums.RequestState;
 import com.placement.teama.telemetry.TelemetryService;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -15,20 +18,32 @@ import java.time.Instant;
 /** Connects the existing queue, rule engine and lock manager into one lifecycle. */
 @Component
 public class EligibilityLifecycleWorker {
+    private static final Logger log = LoggerFactory.getLogger(EligibilityLifecycleWorker.class);
     private final QueueService queueService;
     private final EligibilityService eligibilityService;
     private final DecisionStoreService decisionStoreService;
     private final LockManager lockManager;
     private final TelemetryService telemetryService;
+    private final TeamCDecisionCallback teamCCallback;
 
+    /** Compatibility constructor for focused unit tests that do not exercise outbound delivery. */
     public EligibilityLifecycleWorker(QueueService queueService, EligibilityService eligibilityService,
                                       DecisionStoreService decisionStoreService, LockManager lockManager,
                                       TelemetryService telemetryService) {
+        this(queueService, eligibilityService, decisionStoreService, lockManager, telemetryService,
+                (applicationId, decision, correlationId) -> { });
+    }
+
+    @Autowired
+    public EligibilityLifecycleWorker(QueueService queueService, EligibilityService eligibilityService,
+                                      DecisionStoreService decisionStoreService, LockManager lockManager,
+                                      TelemetryService telemetryService, TeamCDecisionCallback teamCCallback) {
         this.queueService = queueService;
         this.eligibilityService = eligibilityService;
         this.decisionStoreService = decisionStoreService;
         this.lockManager = lockManager;
         this.telemetryService = telemetryService;
+        this.teamCCallback = teamCCallback;
     }
 
     @Scheduled(fixedDelayString = "${teama.worker.poll-ms:25}")
@@ -39,6 +54,7 @@ public class EligibilityLifecycleWorker {
 
     /** Public for deterministic integration tests and a future managed executor. */
     public void process(EligibilityRequestEntity request) {
+        EligibilityDecisionResponse completedDecision = null;
         request.setState(RequestState.PROCESSING);
         request.setProcessingStartedAt(Instant.now());
         telemetryService.recordProcessingStarted();
@@ -53,6 +69,7 @@ public class EligibilityLifecycleWorker {
             decision.setCorrelationId(request.getCorrelationId());
             request.setFailedRules(decision.getFailedRules());
             decisionStoreService.save(decision);
+            completedDecision = decision;
             request.setDecisionId(decision.getDecisionId());
             request.setEligibilityResult(decision.getEligibilityResult());
             request.setState(RequestState.EVALUATED);
@@ -103,6 +120,15 @@ public class EligibilityLifecycleWorker {
             request.setCompletedAt(Instant.now());
             telemetryService.recordFailure();
             telemetryService.recordCompleted();
+        } finally {
+            if (completedDecision != null && request.getCompletedAt() != null) {
+                try {
+                    teamCCallback.deliver(request.getApplicationId(), completedDecision, request.getCorrelationId());
+                } catch (RuntimeException ex) {
+                    log.warn("Could not schedule Team C callback: decision_id={}, error={}",
+                            completedDecision.getDecisionId(), ex.getClass().getSimpleName());
+                }
+            }
         }
     }
 
