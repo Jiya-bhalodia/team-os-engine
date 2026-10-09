@@ -13,21 +13,26 @@ import java.util.UUID;
 public class WeightedPriorityStrategy implements IRuleEngineStrategy {
     @Override
     public EligibilityDecisionResponse evaluate(RuleSet ruleSet, StudentSnapshot student, Map<String, Object> params) {
+        RuleSetValidator.validate(ruleSet, student);
         long start = System.nanoTime();
         List<String> failedRules = new ArrayList<>();
         double totalWeight = 0.0;
         double passedWeight = 0.0;
+        boolean hardRequirementFailed = false;
 
         for (EligibilityRule rule : ruleSet.getRules()) {
             totalWeight += rule.getWeight();
             boolean ok = RuleHelper.checkRule(rule, student, failedRules);
             if (ok) passedWeight += rule.getWeight();
+            else if (RuleSetValidator.isHardRequirement(rule.getRuleType())) hardRequirementFailed = true;
         }
 
         double scorePct = totalWeight > 0 ? (passedWeight / totalWeight) * 100.0 : 0.0;
         EligibilityResult finalResult;
 
-        if (scorePct >= 80.0) {
+        if (hardRequirementFailed) {
+            finalResult = EligibilityResult.NOT_ELIGIBLE;
+        } else if (scorePct >= 80.0) {
             finalResult = EligibilityResult.ELIGIBLE;
         } else if (scorePct >= 50.0) {
             finalResult = EligibilityResult.CONDITIONAL;

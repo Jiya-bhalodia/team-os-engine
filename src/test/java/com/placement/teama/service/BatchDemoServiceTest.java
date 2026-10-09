@@ -52,6 +52,25 @@ class BatchDemoServiceTest {
                 ? m.get("deadlocks_detected") : -1L);
     }
 
+    @Test
+    void invalidBatchRulesAreRejectedBeforeRequestsAreQueued() {
+        QueueService queue = new QueueService("fifo", 100);
+        TelemetryService telemetry = new TelemetryService();
+        DecisionStoreService decisions = new DecisionStoreService();
+        LockManager locks = new LockManager();
+        BatchDemoService service = new BatchDemoService(queue,
+                new EligibilityLifecycleWorker(queue, new EligibilityService(), decisions, locks, telemetry),
+                locks, telemetry, decisions);
+        BatchEvaluationRequestDto invalid = batchRequest();
+        invalid.getRuleSet().getRules().get(0).setRuleType("unknown_rule");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> service.submit(invalid, "corr-invalid-batch"));
+
+        assertTrue(error.getMessage().contains("unsupported"));
+        assertEquals(0, queue.getDepth());
+    }
+
     private BatchEvaluationRequestDto batchRequest() {
         BatchEvaluationRequestDto batch = new BatchEvaluationRequestDto();
         batch.setDriveId("DRV-BATCH"); batch.setRuleSetVersion("v1");
@@ -61,7 +80,7 @@ class BatchDemoServiceTest {
         for (int i = 0; i < 20; i++) {
             BatchStudentRequestDto student = new BatchStudentRequestDto();
             student.setStudent(StudentSnapshot.builder().studentId("BATCH-" + i).cgpa(i < 10 ? 8.0 : 6.0)
-                    .backlogs(0).branch("CSE").attendancePct(90).skills(List.of("Java")).build());
+                    .backlogs(0).branch("CSE").attendancePct(90.0).skills(List.of("Java")).build());
             student.setPriority(i); students.add(student);
         }
         batch.setStudents(students); return batch;

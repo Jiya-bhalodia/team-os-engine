@@ -32,6 +32,6 @@ class TeamAContractTest {
         SlotLease lease=l.acquireSlotLock("S","STU",60); assertTrue(l.commitSlotLease(lease.getLeaseId())); assertFalse(l.releaseSlotLock(lease.getLeaseId()));
     }
     private EligibilityRequestEntity details(double cgpa) { return EligibilityRequestEntity.builder().student(student(cgpa)).ruleSet(rules()).chainingStrategy("sequential_and").slotLeaseTtlSeconds(60).build(); }
-    private StudentSnapshot student(double cgpa) { return StudentSnapshot.builder().studentId("STU-1").cgpa(cgpa).backlogs(0).branch("CSE").attendancePct(90).skills(List.of("Java")).build(); }
+    private StudentSnapshot student(double cgpa) { return StudentSnapshot.builder().studentId("STU-1").cgpa(cgpa).backlogs(0).branch("CSE").attendancePct(90.0).skills(List.of("Java")).build(); }
     private RuleSet rules() { return RuleSet.builder().version("v1").rules(List.of(new EligibilityRule("CGPA","min_cgpa",7.5,1))).build(); }
 }

@@ -13,6 +13,7 @@ import java.util.UUID;
 public class SequentialAndStrategy implements IRuleEngineStrategy {
     @Override
     public EligibilityDecisionResponse evaluate(RuleSet ruleSet, StudentSnapshot student, Map<String, Object> params) {
+        RuleSetValidator.validate(ruleSet, student);
         long start = System.nanoTime();
         List<String> failedRules = new ArrayList<>();
         boolean passedAll = true;

@@ -282,7 +282,7 @@ class EligibilityLifecycleWorkerTest {
 
     private StudentSnapshot student(double cgpa, int backlogs) {
         return StudentSnapshot.builder().studentId("STUDENT").cgpa(cgpa).backlogs(backlogs)
-                .branch("CSE").attendancePct(90).skills(List.of("Java")).build();
+                .branch("CSE").attendancePct(90.0).skills(List.of("Java")).build();
     }
 
     private RuleSet rules() {

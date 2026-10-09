@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import com.placement.teama.service.IdempotencyConflictException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
@@ -16,8 +17,21 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException ex, HttpServletRequest request) {
         String corrId = request.getHeader("X-Correlation-ID");
         if (corrId == null) corrId = "corr-err-400";
+        String message = ex.getMessage() == null ? "Invalid request" : ex.getMessage();
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error("INVALID_ARGUMENT", ex.getMessage(), corrId));
+                .body(ApiResponse.error("INVALID_ARGUMENT", message, corrId,
+                        java.util.List.<Object>of(java.util.Map.of("reason", message))));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(HttpMessageNotReadableException ex,
+                                                                  HttpServletRequest request) {
+        String corrId = request.getHeader("X-Correlation-ID");
+        if (corrId == null) corrId = "corr-err-400";
+        String message = "Request body contains malformed JSON or values incompatible with the API schema";
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error("INVALID_REQUEST_BODY", message, corrId,
+                        java.util.List.<Object>of(java.util.Map.of("reason", message))));
     }
 
     @ExceptionHandler(IdempotencyConflictException.class)

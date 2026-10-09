@@ -26,8 +26,13 @@ public class ApiResponse<T> {
     }
 
     public static <T> ApiResponse<T> error(String code, String message, String correlationId) {
+        return error(code, message, correlationId, java.util.Collections.emptyList());
+    }
+
+    public static <T> ApiResponse<T> error(String code, String message, String correlationId,
+                                           java.util.List<Object> details) {
         return ApiResponse.<T>builder()
-                .error(new ApiError(code, message, java.util.Collections.emptyList()))
+                .error(new ApiError(code, message, details == null ? java.util.Collections.emptyList() : details))
                 .meta(new MetaResponse(correlationId, "v1"))
                 .build();
     }

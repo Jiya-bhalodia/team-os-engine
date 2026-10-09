@@ -30,14 +30,7 @@ public class EligibilityService {
             String strategyName,
             Map<String, Object> params) {
 
-        if (ruleSet == null) {
-            throw new IllegalArgumentException("Rule set is required");
-        }
-
-        if (student == null) {
-            throw new IllegalArgumentException("Student snapshot is required");
-        }
-
+        validateInput(ruleSet, student, strategyName);
         if (strategyName == null || strategyName.isBlank()) {
             strategyName = "sequential_and";
         }
@@ -51,6 +44,13 @@ public class EligibilityService {
         }
 
         return strategy.evaluate(ruleSet, student, params);
+    }
+
+    public void validateInput(RuleSet ruleSet, StudentSnapshot student, String strategyName) {
+        com.placement.teama.algorithm.rule.RuleSetValidator.validate(ruleSet, student);
+        if (strategyName != null && !strategyName.isBlank() && !supportsStrategy(strategyName)) {
+            throw new IllegalArgumentException("Unsupported rule strategy: " + strategyName);
+        }
     }
 
     public boolean supportsStrategy(String strategyName) {

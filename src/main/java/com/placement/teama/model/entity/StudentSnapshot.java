@@ -18,10 +18,10 @@ import java.util.List;
 public class StudentSnapshot {
     @JsonAlias("studentId")
     private String studentId;
-    private double cgpa;
-    private int backlogs;
+    private Double cgpa;
+    private Integer backlogs;
     private String branch;
     @JsonAlias("attendancePct")
-    private double attendancePct;
+    private Double attendancePct;
     private List<String> skills;
 }

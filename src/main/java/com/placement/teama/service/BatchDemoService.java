@@ -15,6 +15,7 @@ import com.placement.teama.model.enums.RequestState;
 import com.placement.teama.model.enums.SlotState;
 import com.placement.teama.telemetry.TelemetryService;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,20 +36,31 @@ public class BatchDemoService {
     private final LockManager lockManager;
     private final TelemetryService telemetryService;
     private final DecisionStoreService decisionStoreService;
+    private final EligibilityService eligibilityService;
     private final ExecutorService executor = Executors.newFixedThreadPool(DEMO_WORKERS);
     private final Map<String, BatchRecord> batches = new ConcurrentHashMap<>();
 
     public BatchDemoService(QueueService queueService, EligibilityLifecycleWorker lifecycleWorker,
                             LockManager lockManager, TelemetryService telemetryService,
                             DecisionStoreService decisionStoreService) {
+        this(queueService, lifecycleWorker, lockManager, telemetryService, decisionStoreService,
+                new EligibilityService());
+    }
+
+    @Autowired
+    public BatchDemoService(QueueService queueService, EligibilityLifecycleWorker lifecycleWorker,
+                            LockManager lockManager, TelemetryService telemetryService,
+                            DecisionStoreService decisionStoreService, EligibilityService eligibilityService) {
         this.queueService = queueService;
         this.lifecycleWorker = lifecycleWorker;
         this.lockManager = lockManager;
         this.telemetryService = telemetryService;
         this.decisionStoreService = decisionStoreService;
+        this.eligibilityService = eligibilityService;
     }
 
     public BatchEvaluationResponse submit(BatchEvaluationRequestDto body, String correlationId) {
+        validateBatch(body);
         String batchId = "BATCH-" + UUID.randomUUID().toString().substring(0, 8);
         BatchRecord batch = new BatchRecord(batchId, Instant.now());
         batches.put(batchId, batch);
@@ -69,6 +81,27 @@ public class BatchDemoService {
         }
         for (int worker = 0; worker < DEMO_WORKERS; worker++) executor.submit(this::drainQueue);
         return response(batch);
+    }
+
+    private void validateBatch(BatchEvaluationRequestDto body) {
+        if (body == null) throw new IllegalArgumentException("request body is required");
+        if (body.getRuleSet() == null || body.getRuleSetVersion() == null
+                || !body.getRuleSetVersion().equals(body.getRuleSet().getVersion())) {
+            throw new IllegalArgumentException("rule_set_version must match rule_set.version");
+        }
+        if (body.getStudents() == null || body.getStudents().isEmpty()) {
+            throw new IllegalArgumentException("students must contain at least one entry");
+        }
+        for (int i = 0; i < body.getStudents().size(); i++) {
+            BatchStudentRequestDto entry = body.getStudents().get(i);
+            if (entry == null || entry.getStudent() == null) {
+                throw new IllegalArgumentException("students[" + i + "].student is required");
+            }
+            if (entry.getSlotLeaseTtlSeconds() != null && entry.getSlotLeaseTtlSeconds() <= 0) {
+                throw new IllegalArgumentException("students[" + i + "].slot_lease_ttl_seconds must be greater than zero");
+            }
+            eligibilityService.validateInput(body.getRuleSet(), entry.getStudent(), body.getChainingStrategy());
+        }
     }
 
     private void drainQueue() {
@@ -185,7 +218,7 @@ public class BatchDemoService {
             boolean conditional = i >= 9 && i <= 12;
             StudentSnapshot student = StudentSnapshot.builder().studentId(String.format("DEMO-STU-%02d", i))
                     .cgpa(rejected ? 6.5 : 8.2).backlogs(rejected ? 1 : 0)
-                    .branch(conditional ? "ECE" : "CSE").attendancePct(90).skills(List.of("Java")).build();
+                    .branch(conditional ? "ECE" : "CSE").attendancePct(90.0).skills(List.of("Java")).build();
             BatchStudentRequestDto entry = new BatchStudentRequestDto(); entry.setStudent(student); entry.setPriority(21 - i);
             if (i <= 3) entry.setSlotId("DEMO-SLOT-A");
             students.add(entry);

@@ -53,8 +53,7 @@ public class EligibilityController {
             throw new IllegalArgumentException("A non-empty versioned ruleSet is required");
         if (!body.getRuleSetVersion().equals(body.getRuleSet().getVersion()))
             throw new IllegalArgumentException("ruleSetVersion must match ruleSet.version");
-        if (!eligibilityService.supportsStrategy(body.getChainingStrategy()))
-            throw new IllegalArgumentException("Unsupported rule strategy: " + body.getChainingStrategy());
+        eligibilityService.validateInput(body.getRuleSet(), body.getStudent(), body.getChainingStrategy());
         if (body.getSlotLeaseTtlSeconds() != null && body.getSlotLeaseTtlSeconds() <= 0)
             throw new IllegalArgumentException("slotLeaseTtlSeconds must be greater than zero");
     }
