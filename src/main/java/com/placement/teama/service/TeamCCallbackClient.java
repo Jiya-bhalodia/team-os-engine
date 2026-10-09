@@ -80,6 +80,11 @@ public class TeamCCallbackClient implements TeamCDecisionCallback, AutoCloseable
         }
     }
 
+    @Override
+    public boolean isEnabled() {
+        return properties.isEnabled();
+    }
+
     /** Returns the current in-memory delivery state, or null if this decision has not been submitted. */
     public DeliveryStatus getDeliveryStatus(String decisionId) {
         Delivery delivery = deliveries.get(decisionId);

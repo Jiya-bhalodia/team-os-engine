@@ -1,6 +1,7 @@
 package com.placement.teama.service;
 
 import com.placement.teama.concurrency.LockManager;
+import com.placement.teama.dto.EligibilityDecisionResponse;
 import com.placement.teama.model.entity.EligibilityRequestEntity;
 import com.placement.teama.model.entity.EligibilityRule;
 import com.placement.teama.model.entity.InterviewSlot;
@@ -13,31 +14,81 @@ import com.placement.teama.telemetry.TelemetryService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class EligibilityLifecycleWorkerTest {
     @Test
-    void callbackRunsAfterCompletedDecisionAndCarriesOnlyRealLease() {
+    void successfulLeaseAcquisitionAssociatesLeaseAndApplicationBeforeCallback() {
         QueueService queue = new QueueService("fifo", 10);
-        AtomicBoolean callbackCalled = new AtomicBoolean();
-        EligibilityRequestEntity request = queue.enqueue("STU-1", "DRIVE-1", "v1", 1, "corr", "key",
-                details(student(8.5, 0), rules(), null));
+        DecisionStoreService decisions = new DecisionStoreService();
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-1").driveId("DRIVE-1")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        AtomicReference<EligibilityDecisionResponse> deliveredDecision = new AtomicReference<>();
+        AtomicReference<String> deliveredApplicationId = new AtomicReference<>();
+        EligibilityRequestEntity request = queue.enqueue("APP-1", "STU-1", "DRIVE-1", "v1", 1, "corr", "key",
+                details(student(8.5, 0), rules(), "SLOT-1"));
         EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
-                new DecisionStoreService(), new LockManager(), new TelemetryService(), (applicationId, decision, correlationId) -> {
+                decisions, locks, new TelemetryService(), enabledCallback((applicationId, decision) -> {
                     assertNotNull(request.getCompletedAt());
-                    assertEquals("APP-1", applicationId);
                     assertEquals(request.getRequestId(), decision.getRequestId());
                     assertEquals(EligibilityResult.ELIGIBLE, decision.getEligibilityResult());
-                    assertNull(decision.getLeaseId());
-                    callbackCalled.set(true);
-                });
-        request.setApplicationId("APP-1");
+                    deliveredApplicationId.set(applicationId);
+                    deliveredDecision.set(decision);
+                }));
 
         worker.process(request);
 
-        assertTrue(callbackCalled.get());
+        assertEquals(RequestState.ALLOCATED, request.getState());
+        assertNotNull(request.getLeaseId());
+        assertEquals("APP-1", deliveredApplicationId.get());
+        assertEquals("APP-1", deliveredDecision.get().getApplicationId());
+        assertEquals(request.getLeaseId(), deliveredDecision.get().getLeaseId());
+        assertSame(decisions.find(request.getDecisionId()), deliveredDecision.get());
+    }
+
+    @Test
+    void failedLeaseAcquisitionRecordsReasonAndDoesNotInvokeCallback() throws InterruptedException {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicInteger callbackCount = new AtomicInteger();
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-1").driveId("DRIVE-1")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        assertNotNull(locks.acquireSlotLock("SLOT-1", "OTHER-STUDENT", 60));
+        EligibilityRequestEntity request = queue.enqueue("APP-2", "STU-2", "DRIVE-1", "v1", 1, "corr", "key",
+                details(student(8.5, 0), rules(), "SLOT-1"));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), locks, new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+
+        assertEquals(RequestState.FAILED, request.getState());
+        assertNull(request.getLeaseId());
+        assertTrue(request.getErrorMessage().contains("Interview slot is unavailable"));
+        assertTrue(request.getErrorMessage().contains("required slot lease was not acquired"));
+        assertEquals(0, callbackCount.get());
+    }
+
+    @Test
+    void eligibleRequestWithoutSlotIdRecordsWhyCallbackWasNotSent() {
+        QueueService queue = new QueueService("fifo", 10);
+        AtomicInteger callbackCount = new AtomicInteger();
+        EligibilityRequestEntity request = queue.enqueue("APP-3", "STU-3", "DRIVE-1", "v1", 1, "corr", "key",
+                details(student(8.5, 0), rules(), null));
+        EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
+                new DecisionStoreService(), new LockManager(), new TelemetryService(),
+                enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
+
+        worker.process(request);
+
+        assertEquals(RequestState.EVALUATED, request.getState());
+        assertNull(request.getLeaseId());
+        assertTrue(request.getErrorMessage().contains("required slot lease was not acquired"));
+        assertEquals(0, callbackCount.get());
     }
 
     @Test
@@ -91,6 +142,20 @@ class EligibilityLifecycleWorkerTest {
     private EligibilityRequestEntity details(StudentSnapshot student, RuleSet rules, String slotId) {
         return EligibilityRequestEntity.builder().student(student).ruleSet(rules)
                 .chainingStrategy("sequential_and").slotId(slotId).slotLeaseTtlSeconds(60).build();
+    }
+
+    private TeamCDecisionCallback enabledCallback(java.util.function.BiConsumer<String, EligibilityDecisionResponse> receiver) {
+        return new TeamCDecisionCallback() {
+            @Override
+            public void deliver(String applicationId, EligibilityDecisionResponse decision, String correlationId) {
+                receiver.accept(applicationId, decision);
+            }
+
+            @Override
+            public boolean isEnabled() {
+                return true;
+            }
+        };
     }
 
     private StudentSnapshot student(double cgpa, int backlogs) {

@@ -116,6 +116,7 @@ class TeamCCallbackClientTest {
         assertTrue(latch.await(2, TimeUnit.SECONDS));
         assertEquals(1, received.get());
         assertNull(authorization.get());
+        awaitDeliveryStatus("DEC-no-token", TeamCCallbackClient.DeliveryStatus.DELIVERED);
         assertEquals(TeamCCallbackClient.DeliveryStatus.DELIVERED, client.getDeliveryStatus("DEC-no-token"));
     }
 
@@ -253,6 +254,14 @@ class TeamCCallbackClientTest {
                 .correlationId("corr-1").leaseId(leaseId).eligibilityResult(result)
                 .failedRules(List.of("CGPA 6.5 is below required threshold 7.0")).ruleSetVersion("v1")
                 .decisionMetrics(new EligibilityDecisionResponse.DecisionMetrics(1.0, 1)).build();
+    }
+
+    private void awaitDeliveryStatus(String decisionId, TeamCCallbackClient.DeliveryStatus expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline && client.getDeliveryStatus(decisionId) != expected) {
+            Thread.sleep(5);
+        }
     }
 
 }

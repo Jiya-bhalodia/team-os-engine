@@ -121,14 +121,30 @@ public class EligibilityLifecycleWorker {
             telemetryService.recordFailure();
             telemetryService.recordCompleted();
         } finally {
-            if (completedDecision != null && request.getCompletedAt() != null) {
-                try {
-                    teamCCallback.deliver(request.getApplicationId(), completedDecision, request.getCorrelationId());
-                } catch (RuntimeException ex) {
-                    log.warn("Could not schedule Team C callback: decision_id={}, error={}",
-                            completedDecision.getDecisionId(), ex.getClass().getSimpleName());
+            if (completedDecision != null && request.getCompletedAt() != null && teamCCallback.isEnabled()) {
+                if (completedDecision.getLeaseId() == null || completedDecision.getLeaseId().isBlank()) {
+                    recordCallbackMissingLease(request);
+                    log.warn("Team C callback not sent: decision_id={}, reason=required_lease_unavailable",
+                            completedDecision.getDecisionId());
+                } else {
+                    try {
+                        teamCCallback.deliver(request.getApplicationId(), completedDecision, request.getCorrelationId());
+                    } catch (RuntimeException ex) {
+                        log.warn("Could not schedule Team C callback: decision_id={}, error={}",
+                                completedDecision.getDecisionId(), ex.getClass().getSimpleName());
+                    }
                 }
             }
+        }
+    }
+
+    private void recordCallbackMissingLease(EligibilityRequestEntity request) {
+        String reason = "Team C callback not sent: required slot lease was not acquired";
+        String existingError = request.getErrorMessage();
+        if (existingError == null || existingError.isBlank()) {
+            request.setErrorMessage(reason);
+        } else if (!existingError.contains(reason)) {
+            request.setErrorMessage(existingError + "; " + reason);
         }
     }
 
