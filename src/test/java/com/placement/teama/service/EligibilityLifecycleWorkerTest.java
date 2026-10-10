@@ -234,20 +234,26 @@ class EligibilityLifecycleWorkerTest {
     }
 
     @Test
-    void ineligibleRequestStopsBeforeSlotAllocation() {
+    void ineligibleRequestStopsBeforeSlotAllocation() throws InterruptedException {
         QueueService queue = new QueueService("fifo", 10);
         DecisionStoreService decisions = new DecisionStoreService();
         TelemetryService telemetry = new TelemetryService();
+        LockManager locks = new LockManager();
+        locks.registerSlot(InterviewSlot.builder().slotId("SLOT-INELIGIBLE").driveId("DRIVE-1")
+                .capacity(1).state(SlotState.AVAILABLE).build());
+        AtomicInteger callbackCount = new AtomicInteger();
         EligibilityLifecycleWorker worker = new EligibilityLifecycleWorker(queue, new EligibilityService(),
-                decisions, new LockManager(), telemetry);
+                decisions, locks, telemetry, enabledCallback((applicationId, decision) -> callbackCount.incrementAndGet()));
 
         EligibilityRequestEntity request = queue.enqueue("STU-2", "DRIVE-1", "v1", 1, "corr-2", "key-2",
-                details(student(6.0, 0), rules(), null));
+                details(student(6.0, 0), rules(), "SLOT-INELIGIBLE"));
         worker.process(queue.dequeueNext());
 
         assertEquals(RequestState.NOT_ELIGIBLE, request.getState());
         assertNotNull(request.getDecisionId());
         assertNull(request.getLeaseId());
+        assertEquals(0, callbackCount.get());
+        assertNotNull(locks.acquireSlotLock("SLOT-INELIGIBLE", "NEXT-STUDENT", 60));
         java.util.Map<String, Object> metrics = telemetry.getMetricsSummary(0);
         assertEquals(1L, metrics.get("completed_requests"));
         assertEquals(0L, metrics.get("failed_requests"));

@@ -13,6 +13,8 @@ public class TeamCCallbackProperties {
     private Duration readTimeout = Duration.ofSeconds(5);
     private int maxAttempts = 3;
     private Duration retryBackoff = Duration.ofMillis(250);
+    private boolean receiverIdempotencyConfirmed;
+    private int maxRedeliveries = 1;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -28,4 +30,10 @@ public class TeamCCallbackProperties {
     public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
     public Duration getRetryBackoff() { return retryBackoff; }
     public void setRetryBackoff(Duration retryBackoff) { this.retryBackoff = retryBackoff; }
+    public boolean isReceiverIdempotencyConfirmed() { return receiverIdempotencyConfirmed; }
+    public void setReceiverIdempotencyConfirmed(boolean receiverIdempotencyConfirmed) {
+        this.receiverIdempotencyConfirmed = receiverIdempotencyConfirmed;
+    }
+    public int getMaxRedeliveries() { return maxRedeliveries; }
+    public void setMaxRedeliveries(int maxRedeliveries) { this.maxRedeliveries = maxRedeliveries; }
 }

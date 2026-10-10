@@ -80,6 +80,8 @@ paths:
       responses:
         '200': {description: Decision, content: {application/json: {schema: {$ref: '#/components/schemas/DecisionEnvelope'}}}}
         '400': {description: Invalid request}
+        '401': {description: Missing or invalid bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /internal/v1/locks/acquire:
     post:
       summary: Acquire an exclusive slot lease
@@ -94,6 +96,8 @@ paths:
       responses:
         '200': {description: Lease acquired, content: {application/json: {schema: {$ref: '#/components/schemas/SlotLeaseEnvelope'}}}}
         '409': {description: Slot unavailable or lock wait interrupted}
+        '401': {description: Missing or invalid bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /internal/v1/locks/{leaseId}:
     delete:
       summary: Release an active lease after compensation or cancellation
@@ -104,6 +108,8 @@ paths:
       responses:
         '200': {description: Released, content: {application/json: {schema: {$ref: '#/components/schemas/BooleanResultEnvelope'}}}}
         '400': {description: Lease cannot be released}
+        '401': {description: Missing or invalid bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /internal/v1/locks/{leaseId}/commit:
     post:
       summary: Finalize lease after Team C authoritative commit
@@ -114,6 +120,8 @@ paths:
       responses:
         '200': {description: Committed, content: {application/json: {schema: {$ref: '#/components/schemas/LeaseCommitEnvelope'}}}}
         '400': {description: Lease cannot be committed}
+        '401': {description: Missing or invalid bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /internal/v1/deadlocks/analyse:
     post:
       summary: Analyse a supplied wait-for graph
@@ -127,6 +135,8 @@ paths:
             schema: {$ref: '#/components/schemas/DeadlockAnalysisRequest'}
       responses:
         '200': {description: Deadlock analysis result, content: {application/json: {schema: {$ref: '#/components/schemas/DeadlockAnalysisEnvelope'}}}}
+        '401': {description: Missing or invalid bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /internal/v1/slots:
     post:
       summary: Register an interview slot
@@ -140,6 +150,39 @@ paths:
             schema: {$ref: '#/components/schemas/InterviewSlot'}
       responses:
         '201': {description: Slot registered, content: {application/json: {schema: {$ref: '#/components/schemas/InterviewSlotEnvelope'}}}}
+        '401': {description: Invalid or missing bearer token when service authentication is configured}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
+  /internal/v1/callbacks/{decisionId}/retry:
+    post:
+      summary: Request a bounded redelivery of a failed Team C callback
+      description: >-
+        Redelivery is allowed only when TEAM_C_CALLBACK_IDEMPOTENCY_CONFIRMED=true,
+        the callback has a retryable exhausted/scheduling failure, and the per-decision
+        redelivery budget remains. The receiver must atomically deduplicate Idempotency-Key
+        using the decision ID before this setting is enabled. Delivery state is process-local.
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: decisionId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '202': {description: Redelivery scheduled}
+        '401': {description: Invalid or missing bearer token when service authentication is configured}
+        '404': {description: No in-memory callback delivery exists for this decision}
+        '409': {description: Callback disabled, receiver idempotency unconfirmed, non-retryable state, or retry limit reached}
+        '503': {description: Service authentication is not configured or retry could not be scheduled}
+  /internal/v1/callbacks/{decisionId}:
+    get:
+      summary: Read the in-process delivery status for a Team C callback
+      description: Delivery records exist only in this Team A process and are lost on restart.
+      parameters:
+        - {$ref: '#/components/parameters/Authorization'}
+        - {in: path, name: decisionId, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/CorrelationId'}
+      responses:
+        '200': {description: Delivery status and remaining manual redelivery rounds}
+        '401': {description: Invalid or missing bearer token when service authentication is configured}
+        '404': {description: No in-memory callback delivery exists for this decision}
+        '503': {description: Service authentication is not configured; internal routes fail closed}
   /api/v1/metrics/eligibility:
     get:
       summary: Read runtime and eligibility metrics
@@ -205,7 +248,7 @@ paths:
         '201': {description: Batch and deadlock demonstration results, content: {application/json: {schema: {$ref: '#/components/schemas/FullDemoEnvelope'}}}}
 components:
   parameters:
-    Authorization: {in: header, name: Authorization, required: true, schema: {type: string, example: Bearer service-token}}
+    Authorization: {in: header, name: Authorization, required: false, description: When TEAM_A_SERVICE_TOKEN is configured, all endpoints except /health and /ready require this exact Bearer token. Internal endpoints return 503 when the token is not configured., schema: {type: string, example: Bearer service-token}}
     CorrelationId: {in: header, name: X-Correlation-ID, required: false, schema: {type: string}}
     IdempotencyKey: {in: header, name: Idempotency-Key, required: true, schema: {type: string}}
   schemas:

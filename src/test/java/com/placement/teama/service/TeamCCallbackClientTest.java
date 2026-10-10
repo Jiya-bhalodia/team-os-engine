@@ -34,11 +34,13 @@ class TeamCCallbackClientTest {
         AtomicInteger received = new AtomicInteger();
         CountDownLatch latch = new CountDownLatch(3);
         AtomicReference<JsonNode> lastBody = new AtomicReference<>();
+        java.util.concurrent.CopyOnWriteArrayList<String> requestKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
         java.util.concurrent.CopyOnWriteArrayList<JsonNode> bodies = new java.util.concurrent.CopyOnWriteArrayList<>();
         startServer(exchange -> {
             assertEquals("/internal/v1/applications/APP%2001/eligibility", exchange.getRequestURI().getRawPath());
             assertEquals("Bearer callback-secret", exchange.getRequestHeaders().getFirst("Authorization"));
             assertEquals("corr-1", exchange.getRequestHeaders().getFirst("X-Correlation-ID"));
+            requestKeys.add(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
             JsonNode body = new ObjectMapper().readTree(exchange.getRequestBody());
             lastBody.set(body);
             bodies.add(body);
@@ -56,8 +58,11 @@ class TeamCCallbackClientTest {
         }
         assertTrue(latch.await(3, TimeUnit.SECONDS));
         assertEquals(3, received.get());
+        assertEquals(java.util.Set.of("DEC-0", "DEC-1", "DEC-2"), java.util.Set.copyOf(requestKeys));
         assertEquals(java.util.Set.of("ELIGIBLE", "CONDITIONAL", "NOT_ELIGIBLE"),
                 bodies.stream().map(body -> body.get("result").asText()).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(java.util.Set.of("DEC-0", "DEC-1", "DEC-2"),
+                bodies.stream().map(body -> body.get("decision_id").asText()).collect(java.util.stream.Collectors.toSet()));
         assertEquals(java.util.Set.of("LEASE-real-0", "LEASE-real-1", "LEASE-real-2"),
                 bodies.stream().map(body -> body.get("lease_id").asText()).collect(java.util.stream.Collectors.toSet()));
         JsonNode body = lastBody.get();
@@ -144,20 +149,25 @@ class TeamCCallbackClientTest {
         AtomicInteger timeoutCount = new AtomicInteger();
         CountDownLatch timeoutLatch = new CountDownLatch(2);
         java.util.concurrent.CopyOnWriteArrayList<String> timeoutBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CopyOnWriteArrayList<String> timeoutKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
         startServer(exchange -> {
             timeoutCount.incrementAndGet();
             timeoutBodies.add(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            timeoutKeys.add(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
             timeoutLatch.countDown();
             try { Thread.sleep(300); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
             try { exchange.sendResponseHeaders(204, -1); } catch (IOException ignored) { }
             exchange.close();
         });
-        client = new TeamCCallbackClient(properties(2, 75, 1), new ObjectMapper());
+        TeamCCallbackProperties timeoutProperties = properties(2, 75, 1);
+        timeoutProperties.setReceiverIdempotencyConfirmed(true);
+        client = new TeamCCallbackClient(timeoutProperties, new ObjectMapper());
         client.deliver("APP", decision("DEC-timeout", EligibilityResult.ELIGIBLE, "LEASE-timeout"), null);
         assertTrue(timeoutLatch.await(2, TimeUnit.SECONDS));
         Thread.sleep(250);
         assertEquals(2, timeoutCount.get());
         assertEquals(1, timeoutBodies.stream().distinct().count());
+        assertEquals(List.of("DEC-timeout", "DEC-timeout"), timeoutKeys);
         assertEquals(TeamCCallbackClient.DeliveryStatus.FAILED_RETRIES_EXHAUSTED,
                 client.getDeliveryStatus("DEC-timeout"));
         client.close();
@@ -167,19 +177,24 @@ class TeamCCallbackClientTest {
         AtomicInteger serverErrors = new AtomicInteger();
         CountDownLatch serverErrorLatch = new CountDownLatch(2);
         java.util.concurrent.CopyOnWriteArrayList<String> serverErrorBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CopyOnWriteArrayList<String> serverErrorKeys = new java.util.concurrent.CopyOnWriteArrayList<>();
         startServer(exchange -> {
             serverErrors.incrementAndGet();
             serverErrorBodies.add(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            serverErrorKeys.add(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
             serverErrorLatch.countDown();
             exchange.sendResponseHeaders(503, -1);
             exchange.close();
         });
-        client = new TeamCCallbackClient(properties(2, 500, 1), new ObjectMapper());
+        TeamCCallbackProperties serverErrorProperties = properties(2, 500, 1);
+        serverErrorProperties.setReceiverIdempotencyConfirmed(true);
+        client = new TeamCCallbackClient(serverErrorProperties, new ObjectMapper());
         client.deliver("APP", decision("DEC-503", EligibilityResult.ELIGIBLE, "LEASE-503"), null);
         assertTrue(serverErrorLatch.await(2, TimeUnit.SECONDS));
         Thread.sleep(100);
         assertEquals(2, serverErrors.get());
         assertEquals(1, serverErrorBodies.stream().distinct().count());
+        assertEquals(List.of("DEC-503", "DEC-503"), serverErrorKeys);
         client.close();
         client = null;
         server.stop(0);
@@ -199,6 +214,61 @@ class TeamCCallbackClientTest {
         assertEquals(1, clientErrors.get());
         assertEquals(TeamCCallbackClient.DeliveryStatus.REJECTED_PERMANENTLY,
                 client.getDeliveryStatus("DEC-400"));
+        assertEquals(TeamCCallbackClient.RetryResult.NOT_RETRYABLE, client.retryFailed("DEC-400"));
+    }
+
+    @Test
+    void ambiguousFailuresAreNotRetriedUntilReceiverIdempotencyIsConfirmed() throws Exception {
+        AtomicInteger received = new AtomicInteger();
+        CountDownLatch latch = new CountDownLatch(1);
+        startServer(exchange -> {
+            received.incrementAndGet();
+            latch.countDown();
+            exchange.sendResponseHeaders(503, -1);
+            exchange.close();
+        });
+        client = new TeamCCallbackClient(properties(3, 500, 0), new ObjectMapper());
+
+        client.deliver("APP", decision("DEC-unconfirmed", EligibilityResult.ELIGIBLE, "LEASE-real"), null);
+
+        assertTrue(latch.await(2, TimeUnit.SECONDS));
+        awaitDeliveryStatus("DEC-unconfirmed", TeamCCallbackClient.DeliveryStatus.FAILED_REQUIRES_IDEMPOTENCY_CONFIRMATION);
+        assertEquals(1, received.get());
+        assertEquals(TeamCCallbackClient.RetryResult.RECEIVER_IDEMPOTENCY_UNCONFIRMED,
+                client.retryFailed("DEC-unconfirmed"));
+        assertEquals(1, received.get());
+    }
+
+    @Test
+    void boundedManualRedeliveryReusesDecisionIdAndIdenticalPayload() throws Exception {
+        AtomicInteger received = new AtomicInteger();
+        CountDownLatch latch = new CountDownLatch(2);
+        java.util.concurrent.CopyOnWriteArrayList<String> bodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.CopyOnWriteArrayList<String> keys = new java.util.concurrent.CopyOnWriteArrayList<>();
+        startServer(exchange -> {
+            int attempt = received.incrementAndGet();
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            keys.add(exchange.getRequestHeaders().getFirst("Idempotency-Key"));
+            latch.countDown();
+            exchange.sendResponseHeaders(attempt == 1 ? 503 : 204, -1);
+            exchange.close();
+        });
+        TeamCCallbackProperties p = properties(1, 500, 0);
+        p.setReceiverIdempotencyConfirmed(true);
+        p.setMaxRedeliveries(1);
+        client = new TeamCCallbackClient(p, new ObjectMapper());
+        client.deliver("APP", decision("DEC-manual-retry", EligibilityResult.ELIGIBLE, "LEASE-real"), "corr");
+
+        awaitDeliveryStatus("DEC-manual-retry", TeamCCallbackClient.DeliveryStatus.FAILED_RETRIES_EXHAUSTED);
+        assertEquals(TeamCCallbackClient.RetryResult.SCHEDULED, client.retryFailed("DEC-manual-retry"));
+        assertTrue(latch.await(2, TimeUnit.SECONDS));
+        awaitDeliveryStatus("DEC-manual-retry", TeamCCallbackClient.DeliveryStatus.DELIVERED);
+
+        assertEquals(2, received.get());
+        assertEquals(1, bodies.stream().distinct().count());
+        assertEquals(List.of("DEC-manual-retry", "DEC-manual-retry"), keys);
+        assertEquals(TeamCCallbackClient.RetryResult.NOT_RETRYABLE, client.retryFailed("DEC-manual-retry"));
+        assertEquals(2, received.get());
     }
 
     @Test
